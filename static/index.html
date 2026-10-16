@@ -1,0 +1,2434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>金融分析多 Agent 投研协同平台 | Financial Multi-Agent</title>
+  <!-- 字体与排版库 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <!-- Markdown 渲染器 -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <style>
+    :root {
+      --bg-canvas: #fcfbf9;
+      --bg-surface: #ffffff;
+      --bg-surface-soft: #f6f5f1;
+      --bg-surface-hover: #f0eee8;
+      --border-subtle: #eae7df;
+      --border-strong: #ded9cf;
+      --text-main: #201f1e;
+      --text-muted: #6b6863;
+      --text-sub: #949089;
+      --accent-primary: #cc6b49;
+      --accent-primary-hover: #b85c3b;
+      --accent-primary-subtle: #fbf0ec;
+      --bull-green: #15803d;
+      --bull-bg: #f0fdf4;
+      --bear-red: #b91c1c;
+      --bear-bg: #fef2f2;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', Consolas, monospace;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+      --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.05);
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg-canvas);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* 顶部导航与 Header */
+    .app-header {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 14px 28px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-sm);
+      background: var(--accent-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-weight: 700;
+      font-size: 16px;
+    }
+    .brand-title {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .brand-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .header-badges {
+      display: flex;
+      gap: 8px;
+    }
+    .badge {
+      font-size: 11px;
+      font-weight: 500;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-surface-soft);
+      color: var(--text-muted);
+    }
+    .badge-accent {
+      background: var(--accent-primary-subtle);
+      color: var(--accent-primary);
+      border-color: #f5d4c7;
+    }
+
+    /* 主体容器 */
+    .main-container {
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* 输入控制台 Card */
+    .control-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 20px 24px;
+      box-shadow: var(--shadow-sm);
+    }
+    .preset-pills {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .preset-label {
+      font-size: 12px;
+      color: var(--text-sub);
+      margin-right: 4px;
+    }
+    .preset-btn {
+      background: var(--bg-surface-soft);
+      border: 1px solid var(--border-subtle);
+      border-radius: 999px;
+      padding: 4px 12px;
+      font-size: 12px;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .preset-btn:hover {
+      background: var(--bg-surface-hover);
+      color: var(--text-main);
+      border-color: var(--border-strong);
+    }
+
+    .search-row {
+      display: grid;
+      grid-template-columns: 220px 1fr 140px;
+      gap: 12px;
+      align-items: center;
+    }
+    .input-field {
+      width: 100%;
+      height: 42px;
+      padding: 0 14px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      font-size: 14px;
+      background: var(--bg-surface);
+      color: var(--text-main);
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .input-field:focus {
+      border-color: var(--accent-primary);
+      box-shadow: 0 0 0 2px var(--accent-primary-subtle);
+    }
+    .btn-analyze {
+      height: 42px;
+      background: var(--accent-primary);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius-md);
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.15s ease;
+    }
+    .btn-analyze:hover {
+      background: var(--accent-primary-hover);
+    }
+    .btn-analyze:disabled {
+      background: var(--border-strong);
+      cursor: not-allowed;
+    }
+
+    /* 策略风格与指标权重定制 */
+    .strategy-section {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px dashed var(--border-subtle);
+    }
+    .strategy-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .style-selector {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .style-btn {
+      background: var(--bg-surface-soft);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .style-btn:hover {
+      background: var(--bg-surface-hover);
+      color: var(--text-main);
+      border-color: var(--border-strong);
+    }
+    .style-btn.active {
+      background: var(--accent-primary-subtle);
+      border-color: var(--accent-primary);
+      color: var(--accent-primary);
+      font-weight: 600;
+    }
+    .weights-panel {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      margin-top: 10px;
+      padding: 10px 14px;
+      background: var(--bg-surface-soft);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      transition: all 0.2s ease;
+    }
+    .weight-control {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .weight-title {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-sub);
+    }
+    .weight-pct {
+      font-weight: 600;
+      color: var(--accent-primary);
+    }
+    .weight-slider {
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border-strong);
+      outline: none;
+      accent-color: var(--accent-primary);
+      cursor: pointer;
+    }
+
+    /* 两栏网格 */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 1fr 1.25fr;
+      gap: 20px;
+    }
+
+    /* 左侧流水线与辩论看板 */
+    .pipeline-card, .quant-card, .report-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      box-shadow: var(--shadow-sm);
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-main);
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* 状态节点时间线 */
+    .node-timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    .node-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      background: var(--bg-surface-soft);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      transition: all 0.2s;
+    }
+    .node-item.active {
+      border-color: var(--accent-primary);
+      background: var(--accent-primary-subtle);
+    }
+    .node-item.done {
+      border-color: #bbf7d0;
+      background: #f0fdf4;
+    }
+    .node-icon {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--border-strong);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: #fff;
+    }
+    .node-item.done .node-icon {
+      background: var(--bull-green);
+    }
+    .node-item.active .node-icon {
+      background: var(--accent-primary);
+      animation: pulse 1.5s infinite;
+    }
+    .node-content {
+      flex: 1;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .node-name {
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .node-status {
+      font-size: 11px;
+      color: var(--text-sub);
+      font-family: var(--font-mono);
+    }
+
+    /* 多空博弈对决卡片 */
+    .debate-arena {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .debate-box {
+      border-radius: var(--radius-md);
+      padding: 12px 16px;
+      border: 1px solid;
+    }
+    .debate-box.bull {
+      background: var(--bull-bg);
+      border-color: #bbf7d0;
+    }
+    .debate-box.bear {
+      background: var(--bear-bg);
+      border-color: #fecaca;
+    }
+    .debate-header {
+      display: flex;
+      justify-content: space-between;
+      font-weight: 600;
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .debate-box.bull .debate-header { color: var(--bull-green); }
+    .debate-box.bear .debate-header { color: var(--bear-red); }
+    .debate-text {
+      font-size: 13px;
+      color: var(--text-main);
+      line-height: 1.5;
+    }
+    .debate-text p {
+      margin: 0 0 6px 0;
+    }
+    .debate-text ul {
+      margin: 4px 0 2px 18px;
+      padding: 0;
+    }
+    .debate-text li {
+      margin-bottom: 4px;
+    }
+    .debate-text strong {
+      color: var(--text-main);
+    }
+
+    /* 仲裁结果横幅与矛盾对立 */
+    .verdict-banner {
+      background: var(--bg-surface-soft);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .verdict-main {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--accent-primary);
+    }
+    .verdict-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .verdict-contradiction-box {
+      margin-top: 4px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--border-subtle);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    /* 全网事实情报看板 (Grounding) */
+    .intel-banner {
+      background: var(--bg-surface-soft);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      margin-top: 14px;
+      margin-bottom: 6px;
+    }
+    .intel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .intel-flow-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--bg-surface);
+      color: var(--text-main);
+      border: 1px solid var(--border-subtle);
+    }
+    .intel-flow-pos { background: #fee2e2; color: #b91c1c; border-color: #fecaca; }
+    .intel-flow-neg { background: #dcfce7; color: #15803d; border-color: #bbf7d0; }
+    .intel-feed-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .intel-col {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px;
+      font-size: 11px;
+      line-height: 1.4;
+      max-height: 110px;
+      overflow-y: auto;
+    }
+    .intel-col-title {
+      font-weight: 600;
+      color: var(--text-sub);
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .intel-item {
+      color: var(--text-muted);
+      margin-bottom: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* 多轮辩论切换器与交锋焦点 */
+    .debate-round-nav {
+      display: flex;
+      gap: 6px;
+      margin: 8px 0;
+      flex-wrap: wrap;
+    }
+    .round-nav-btn {
+      padding: 4px 10px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-surface-soft);
+      color: var(--text-muted);
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.15s;
+    }
+    .round-nav-btn.active {
+      background: var(--accent-primary);
+      color: #fff;
+      border-color: var(--accent-primary);
+    }
+    .battleground-banner {
+      background: #fffbeb;
+      border: 1px solid #fef3c7;
+      border-left: 3px solid #f59e0b;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: #92400e;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* 右侧确定性指标看板 */
+    .quant-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .stat-pill {
+      background: var(--bg-surface-soft);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .stat-value {
+      font-size: 17px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: var(--text-main);
+    }
+    .stat-desc {
+      font-size: 11px;
+      color: var(--text-sub);
+    }
+
+    /* 风控沙箱一览 */
+    .risk-box {
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 14px;
+      background: var(--bg-surface-soft);
+      margin-top: 12px;
+    }
+    .risk-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+    .risk-tag {
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .risk-tag.APPROVED { background: #dcfce7; color: var(--bull-green); }
+    .risk-tag.WARNING { background: #fef9c3; color: #854d0e; }
+    .risk-tag.VETOED { background: #fee2e2; color: var(--bear-red); }
+
+    /* 研报展示区域 */
+    .report-card {
+      margin-top: 20px;
+    }
+    .report-content {
+      line-height: 1.7;
+      color: #2b2a28;
+    }
+    .report-content h1 { font-size: 20px; margin: 18px 0 10px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 8px; }
+    .report-content h2 { font-size: 16px; margin: 16px 0 8px; }
+    .report-content h3 { font-size: 14px; margin: 14px 0 6px; }
+    .report-content p { margin-bottom: 10px; }
+    .report-content table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+    .report-content th, .report-content td { border: 1px solid var(--border-subtle); padding: 8px 12px; text-align: left; }
+    .report-content th { background: var(--bg-surface-soft); font-weight: 600; }
+    .report-content blockquote {
+      border-left: 3px solid var(--accent-primary);
+      background: var(--accent-primary-subtle);
+      padding: 8px 14px;
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      margin: 10px 0;
+      color: #555;
+    }
+
+    /* 资深投顾实时追问多轮对话模块样式 */
+    .chat-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 22px;
+      box-shadow: var(--shadow-sm);
+      margin-top: 20px;
+    }
+    .quick-questions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin: 10px 0 14px 0;
+    }
+    .quick-q-btn {
+      font-size: 11px;
+      padding: 4px 10px;
+      background: var(--bg-surface-soft);
+      border: 1px solid var(--border-subtle);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .quick-q-btn:hover {
+      border-color: var(--accent-primary);
+      color: var(--accent-primary);
+      background: #fff;
+    }
+    .chat-messages-container {
+      max-height: 440px;
+      min-height: 200px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px;
+      background: var(--bg-surface-soft);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      margin-bottom: 14px;
+    }
+    .chat-bubble {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      max-width: 90%;
+    }
+    .chat-bubble.assistant {
+      align-self: flex-start;
+    }
+    .chat-bubble.user {
+      align-self: flex-end;
+      flex-direction: row-reverse;
+    }
+    .chat-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      background: #fff;
+      border: 1px solid var(--border-strong);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      flex-shrink: 0;
+    }
+    .chat-bubble.user .chat-avatar {
+      background: var(--accent-primary);
+      color: #fff;
+      border-color: var(--accent-primary);
+    }
+    .chat-body {
+      background: #fff;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 10px 14px;
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--text-main);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    }
+    .chat-bubble.user .chat-body {
+      background: #fff7ed;
+      border-color: #ffedd5;
+      color: #7c2d12;
+    }
+    .chat-body p { margin: 0 0 6px 0; }
+    .chat-body p:last-child { margin-bottom: 0; }
+    .chat-input-row {
+      display: flex;
+      gap: 10px;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.2); opacity: 0.7; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    /* 模拟盘 Paper Trading 模块样式 */
+    .agent-trade-bar {
+      margin-top: 12px;
+      padding: 12px 16px;
+      background: var(--bg-surface-soft);
+      border: 1px dashed var(--accent-primary);
+      border-radius: var(--radius-md);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+    .btn-agent-buy {
+      background: var(--accent-primary);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius-sm);
+      padding: 8px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+      box-shadow: 0 2px 6px rgba(204, 107, 73, 0.25);
+    }
+    .btn-agent-buy:hover {
+      background: var(--accent-primary-hover);
+      transform: translateY(-1px);
+    }
+    .portfolio-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 20px 24px;
+      box-shadow: var(--shadow-sm);
+      margin-top: 20px;
+    }
+    .portfolio-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 12px;
+      margin: 16px 0;
+    }
+    .portfolio-kpi-item {
+      background: var(--bg-surface-soft);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .portfolio-tabs {
+      display: flex;
+      gap: 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      margin-bottom: 14px;
+    }
+    .p-tab-btn {
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+    .p-tab-btn.active {
+      color: var(--accent-primary);
+      border-bottom-color: var(--accent-primary);
+    }
+    .portfolio-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .portfolio-table th, .portfolio-table td {
+      border: 1px solid var(--border-subtle);
+      padding: 10px 12px;
+      text-align: left;
+    }
+    .portfolio-table th {
+      background: var(--bg-surface-soft);
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .portfolio-table tr:hover {
+      background: var(--bg-surface-soft);
+    }
+    .pnl-pos { color: var(--bear-red); font-weight: 600; } /* A股习惯：红涨绿跌 */
+    .pnl-neg { color: var(--bull-green); font-weight: 600; }
+    .badge-strategy {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: #f3f4f6;
+      color: #374151;
+      font-size: 11px;
+      border: 1px solid #e5e7eb;
+    }
+    .act-btn {
+      padding: 4px 8px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: 1px solid var(--border-subtle);
+      background: #fff;
+      cursor: pointer;
+      margin-right: 4px;
+      transition: all 0.15s;
+    }
+    .act-btn:hover { background: var(--bg-surface-hover); }
+    .act-btn.buy { color: var(--bull-green); border-color: #86efac; }
+    .act-btn.sell { color: var(--bear-red); border-color: #fca5a5; }
+    .act-btn.re-analyze { color: var(--accent-primary); border-color: #fdba74; }
+
+    /* 手动委托下单弹窗 */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal-box {
+      background: #fff;
+      border-radius: var(--radius-lg);
+      width: 440px;
+      padding: 24px;
+      box-shadow: var(--shadow-md);
+      border: 1px solid var(--border-strong);
+    }
+    .modal-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .form-group {
+      margin-bottom: 12px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+    .form-input {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 顶部导航 -->
+  <header class="app-header">
+    <div class="brand-section">
+      <div class="brand-logo">F</div>
+      <div>
+        <div class="brand-title">Financial Multi-Agent Analysis Platform</div>
+        <div class="brand-subtitle">投委会博弈协同 · 确定性金融计算沙箱 · 合规风控一票否决</div>
+      </div>
+    </div>
+    <div class="header-badges">
+      <button id="btnLlmSettings" class="badge badge-accent" style="cursor: pointer; display: inline-flex; align-items: center; gap: 5px; font-weight: 600; padding: 4px 10px;" onclick="openLlmConfigModal()" title="点击配置云端大模型 API Key">
+        <span id="llmStatusDot" style="width: 8px; height: 8px; border-radius: 50%; background: #16a34a; display: inline-block;"></span>
+        <span id="llmStatusText">LLM: 检测中...</span>
+        <span style="font-size: 11px; opacity: 0.85;">⚙️ 设置</span>
+      </button>
+      <span class="badge">Deterministic Quant</span>
+      <span class="badge">Monte Carlo VaR</span>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <!-- 标的输入与控制面板 -->
+    <section class="control-card">
+      <div class="preset-pills">
+        <span class="preset-label">快捷蓝筹标的：</span>
+        <button class="preset-btn" onclick="setTicker('600519', '贵州茅台')">600519 贵州茅台</button>
+        <button class="preset-btn" onclick="setTicker('300750', '宁德时代')">300750 宁德时代</button>
+        <button class="preset-btn" onclick="setTicker('002594', '比亚迪')">002594 比亚迪</button>
+        <button class="preset-btn" onclick="setTicker('AAPL', 'Apple Inc.')">AAPL 苹果</button>
+        <button class="preset-btn" onclick="setTicker('NVDA', 'NVIDIA')">NVDA 英伟达</button>
+      </div>
+
+      <div class="search-row">
+        <input type="text" id="tickerInput" class="input-field" placeholder="输入股票代码 (如 600519)" value="600519">
+        <input type="text" id="queryInput" class="input-field" placeholder="投研核心侧重点 (选填，如：评估提价能力与海外出口增长潜力)">
+        <button id="btnRun" class="btn-analyze" onclick="startAnalysis()">
+          <span>发起投研</span>
+        </button>
+      </div>
+
+      <!-- 策略风格流派与决策权重微调矩阵 -->
+      <div class="strategy-section">
+        <div class="strategy-row">
+          <span class="preset-label">🎯 决策策略流派：</span>
+          <div class="style-selector">
+            <button class="style-btn active" id="btnStyleBalanced" onclick="selectStrategyStyle('balanced')">⚖️ 机构均衡 (默认)</button>
+            <button class="style-btn" id="btnStyleMomentum" onclick="selectStrategyStyle('momentum')">🚀 动量趋势突破 (防财报滞后)</button>
+            <button class="style-btn" id="btnStyleDeepValue" onclick="selectStrategyStyle('deep_value')">💎 深度价值投资 (逆向重估)</button>
+            <button class="style-btn" id="btnStyleShortTerm" onclick="selectStrategyStyle('short_term')">⚡ 短线游资博弈 (量价资金)</button>
+            <button class="style-btn" id="btnStyleCustom" onclick="toggleCustomSliders()">🛠️ 自定义各指标权重</button>
+          </div>
+        </div>
+
+        <div id="customWeightsPanel" class="weights-panel">
+          <div class="weight-control">
+            <div class="weight-title">
+              <span>📊 公司基本面三表 (杜邦/DCF)</span>
+              <span id="labelWeightFund" class="weight-pct">40%</span>
+            </div>
+            <input type="range" id="sliderWeightFund" min="0" max="100" value="40" step="5" class="weight-slider" oninput="onWeightSliderChange()">
+          </div>
+
+          <div class="weight-control">
+            <div class="weight-title">
+              <span>📈 量化技术动量 (均线/MACD/突破)</span>
+              <span id="labelWeightTech" class="weight-pct">35%</span>
+            </div>
+            <input type="range" id="sliderWeightTech" min="0" max="100" value="35" step="5" class="weight-slider" oninput="onWeightSliderChange()">
+          </div>
+
+          <div class="weight-control">
+            <div class="weight-title">
+              <span>🌐 宏观流动性与产业政策</span>
+              <span id="labelWeightMacro" class="weight-pct">15%</span>
+            </div>
+            <input type="range" id="sliderWeightMacro" min="0" max="100" value="15" step="5" class="weight-slider" oninput="onWeightSliderChange()">
+          </div>
+
+          <div class="weight-control">
+            <div class="weight-title">
+              <span>🌊 资金博弈与预期透支 (Priced-in)</span>
+              <span id="labelWeightFlow" class="weight-pct">10%</span>
+            </div>
+            <input type="range" id="sliderWeightFlow" min="0" max="100" value="10" step="5" class="weight-slider" oninput="onWeightSliderChange()">
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 两栏交互看板 -->
+    <div class="dashboard-grid">
+      <!-- 左栏：多智能体编排与多空辩论流 -->
+      <section class="pipeline-card">
+        <div class="card-title">
+          <span>投委会工作流状态轨迹</span>
+          <span id="runStatus" class="badge">等待指令</span>
+        </div>
+
+        <div class="node-timeline">
+          <div id="node_init" class="node-item">
+            <div class="node-icon">1</div>
+            <div class="node-content">
+              <span class="node-name">行情与财务三表数据提取</span>
+              <span class="node-status">就绪</span>
+            </div>
+          </div>
+          <div id="node_macro" class="node-item">
+            <div class="node-icon">2</div>
+            <div class="node-content">
+              <span class="node-name">宏观经济与产业政策分析师</span>
+              <span class="node-status">待命</span>
+            </div>
+          </div>
+          <div id="node_fund" class="node-item">
+            <div class="node-icon">3</div>
+            <div class="node-content">
+              <span class="node-name">基本面分析师 (杜邦拆解 & DCF估值)</span>
+              <span class="node-status">待命</span>
+            </div>
+          </div>
+          <div id="node_tech" class="node-item">
+            <div class="node-icon">4</div>
+            <div class="node-content">
+              <span class="node-name">量化技术分析师 (MACD / RSI / 布林带)</span>
+              <span class="node-status">待命</span>
+            </div>
+          </div>
+          <div id="node_debate" class="node-item">
+            <div class="node-icon">5</div>
+            <div class="node-content">
+              <span class="node-name">投委会多空辩论 (Bull vs Bear)</span>
+              <span class="node-status">待命</span>
+            </div>
+          </div>
+          <div id="node_risk" class="node-item">
+            <div class="node-icon">6</div>
+            <div class="node-content">
+              <span class="node-name">合规风控硬沙箱 (一票否决权审核)</span>
+              <span class="node-status">待命</span>
+            </div>
+          </div>
+          <div id="node_report" class="node-item">
+            <div class="node-icon">7</div>
+            <div class="node-content">
+              <span class="node-name">研报排版与资产配置终稿</span>
+              <span class="node-status">待命</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 全网实时情报事实看板 (Fact Grounding) -->
+        <div id="intelBanner" class="intel-banner" style="display: none;">
+          <div class="intel-header">
+            <span style="font-size: 12px; font-weight: 600; color: var(--text-main);">📡 全网实时情报事实看板 (Grounding Intel)</span>
+            <span id="intelFlowBadge" class="intel-flow-badge">主力资金加载中...</span>
+          </div>
+          <div class="intel-feed-grid">
+            <div class="intel-col">
+              <div class="intel-col-title">📋 上市公司官方披露重大公告</div>
+              <div id="intelAnnouncementsList">暂无公告</div>
+            </div>
+            <div class="intel-col">
+              <div class="intel-col-title">📰 全网 7x24 滚动快讯要闻</div>
+              <div id="intelNewsList">暂无快讯</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 投委会红蓝军对抗现场 -->
+        <div class="card-title" style="margin-top: 14px;">
+          <span>投委会红蓝军多轮对抗博弈现场</span>
+          <span id="debateRoundBadge" class="badge">Round 0</span>
+        </div>
+
+        <!-- 辩论轮次切换导航 -->
+        <div id="debateRoundNav" class="debate-round-nav" style="display: none;"></div>
+
+        <!-- 当轮交锋战场核心焦点 -->
+        <div id="battlegroundBanner" class="battleground-banner" style="display: none;">
+          <span style="font-weight: 600;">⚔️ 核心交锋焦点：</span><span id="battlegroundText">等待双方辩手入场</span>
+        </div>
+
+        <div class="debate-arena">
+          <div class="debate-box bull">
+            <div class="debate-header">
+              <span>🐂 多头首席进攻辩手 · 催化剂驱动 <span style="font-size: 11px; font-weight: normal; opacity: 0.85; margin-left: 4px;">[进攻阿尔法 = 筹码沉淀/定价权护城河/DCF安全边际]</span></span>
+              <span id="bullScoreBadge">得分: --</span>
+            </div>
+            <div id="bullText" class="debate-text">等待多头立论...</div>
+          </div>
+          <div class="debate-box bear">
+            <div class="debate-header">
+              <span>🐻 空头首席防守辩手 · 脆弱点穿透 <span style="font-size: 11px; font-weight: normal; opacity: 0.85; margin-left: 4px;">[阿喀琉斯之踵 = 杀估值/杠杆债务/上方均线阻力]</span></span>
+              <span id="bearScoreBadge">风险分: --</span>
+            </div>
+            <div id="bearText" class="debate-text">等待空头防守反驳...</div>
+          </div>
+        </div>
+
+        <div class="verdict-banner">
+          <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <div>
+              <div class="verdict-sub">投委会终审仲裁决议 (红蓝对抗博弈 + 独立合规风控一票否决)</div>
+              <div id="verdictText" class="verdict-main">尚未裁决</div>
+            </div>
+            <div style="text-align: right; min-width: 140px;">
+              <div class="verdict-sub">建议组合权重</div>
+              <div id="positionText" style="font-weight: 700; font-size: 15px;">--</div>
+            </div>
+          </div>
+
+          <!-- 核心矛盾对立面与不对称盈亏比 -->
+          <div id="verdictContradictionBox" class="verdict-contradiction-box" style="display: none;">
+            <div><strong style="color:var(--text-sub);">⚡ 核心矛盾对立面:</strong> <span id="verdictContradiction" style="color:var(--text-main); font-weight:600;">--</span></div>
+            <div><strong style="color:var(--text-sub);">⚖️ 非对称盈亏比:</strong> <span id="verdictRiskReward" style="color:var(--text-main); font-weight:600;">--</span></div>
+          </div>
+
+          <div id="verdictReason" style="font-size: 12px; margin-top: 4px; line-height: 1.4;"></div>
+        </div>
+
+        <!-- 一键按 Agent 决策建仓触发条 (投研与模拟仓桥接触发器，需显式点击) -->
+        <div id="agentTradeBanner" class="agent-trade-bar" style="display: none;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 18px;">💡</span>
+            <div>
+              <div style="font-size: 13px; font-weight: 600; color: var(--text-main);">投研决策出具：是否纳入实盘模拟跟踪？</div>
+              <div style="font-size: 11px; color: var(--text-muted);" id="agentTradeHint">当前投研仅供参考，若不点击建仓则模拟仓保持不变</div>
+            </div>
+          </div>
+          <button id="btnAgentBuy" class="btn-agent-buy" onclick="executeAgentAutoBuy()">
+            🚀 确认按 Agent 决策买入建仓
+          </button>
+        </div>
+      </section>
+
+      <!-- 右栏：确定性量化指标面板 -->
+      <section class="quant-card">
+        <div class="card-title">
+          <span>确定性金融模型计算看板 (零幻觉纯算法)</span>
+          <span id="tickerDisplay" class="badge badge-accent">600519</span>
+        </div>
+
+        <div class="quant-grid">
+          <div class="stat-pill">
+            <span class="stat-label">最新收盘价</span>
+            <span id="statPrice" class="stat-value">--</span>
+            <span id="statPePb" class="stat-desc">PE: -- | PB: --</span>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">杜邦分析 ROE</span>
+            <span id="statRoe" class="stat-value">--%</span>
+            <span id="statNetMargin" class="stat-desc">净利率: --%</span>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">DCF 每股公允估值</span>
+            <span id="statDcfValue" class="stat-value">-- 元</span>
+            <span id="statDcfMargin" class="stat-desc">安全边际: --%</span>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">RSI-14 强弱指标</span>
+            <span id="statRsi" class="stat-value">--</span>
+            <span id="statMacd" class="stat-desc">MACD: --</span>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">95% 单周 VaR 风险值</span>
+            <span id="statVar" class="stat-value">--%</span>
+            <span id="statVarLoss" class="stat-desc">预期每股损失: -- 元</span>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-label">技术量化信号</span>
+            <span id="statSignal" class="stat-value" style="font-size: 13px;">等待信号</span>
+            <span id="statSupport" class="stat-desc">支撑: -- | 阻力: --</span>
+          </div>
+        </div>
+
+        <div class="risk-box">
+          <div class="risk-header">
+            <span>合规风控硬沙箱核验</span>
+            <span id="riskStatusBadge" class="risk-tag APPROVED">WAITING</span>
+          </div>
+          <div id="riskChecklist" style="font-size: 12px; color: var(--text-muted); line-height: 1.6;">
+            • 资产负债率警戒审查: 待触发<br>
+            • 利息保障倍数底线核验: 待触发<br>
+            • 蒙特卡洛极端回撤测试: 待触发
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- 模拟实盘追踪与选股效果检验面板 (Paper Trading) -->
+    <section class="portfolio-card">
+      <div class="card-title" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span>💼 投委会模拟实盘跟踪 (Paper Trading Portfolio)</span>
+          <span class="badge badge-accent">选股实盘检验沙箱</span>
+          <span style="font-size: 11px; font-weight: 500; color: #15803d; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 2px 8px; border-radius: 999px;">
+            🔒 独立持仓账本 · 与上方投研标的完全解耦
+          </span>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="preset-btn" onclick="refreshPortfolioPrices()">🔄 刷新持仓现价</button>
+          <button class="preset-btn" onclick="openManualOrderModal()">➕ 手动委托下单</button>
+          <button class="preset-btn" onclick="resetPortfolioAccount()" style="color: var(--bear-red);">🧹 重置账户 (100万)</button>
+        </div>
+      </div>
+      <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+        毫秒级真实行情撮合 · 本地持久化保存 · <strong>仅在您显式点击【买入建仓】或【手动下单】时变动持仓；无论上方发起何种标的投研分析，持仓数据均绝对独立保持、绝不会被动替换或覆盖</strong>
+      </div>
+
+      <!-- 核心资产 KPI -->
+      <div class="portfolio-kpi-grid">
+        <div class="portfolio-kpi-item">
+          <span class="stat-label">总资产 (总市值+现金)</span>
+          <span id="pTotalAssets" class="stat-value">¥1,000,000.00</span>
+          <span id="pTotalReturn" class="stat-desc" style="font-weight: 600;">收益率: +0.00%</span>
+        </div>
+        <div class="portfolio-kpi-item">
+          <span class="stat-label">可用现金</span>
+          <span id="pCash" class="stat-value">¥1,000,000.00</span>
+          <span id="pInitialCap" class="stat-desc">初始本金: ¥1,000,000</span>
+        </div>
+        <div class="portfolio-kpi-item">
+          <span class="stat-label">持仓总市值</span>
+          <span id="pMarketValue" class="stat-value">¥0.00</span>
+          <span id="pPosCount" class="stat-desc">持仓标的: 0 只</span>
+        </div>
+        <div class="portfolio-kpi-item">
+          <span class="stat-label">累计总盈亏额</span>
+          <span id="pTotalPnl" class="stat-value">¥0.00</span>
+          <span class="stat-desc">含历史平仓与浮盈</span>
+        </div>
+        <div class="portfolio-kpi-item">
+          <span class="stat-label">历史平仓交易胜率</span>
+          <span id="pWinRate" class="stat-value">0.0%</span>
+          <span id="pTotalTrades" class="stat-desc">总成交: 0 笔</span>
+        </div>
+      </div>
+
+      <!-- 选项卡与明细表 -->
+      <div class="portfolio-tabs">
+        <button id="tabBtnHoldings" class="p-tab-btn active" onclick="switchPortfolioTab('holdings')">📊 当前活跃持仓 (<span id="tabHoldingsCount">0</span>)</button>
+        <button id="tabBtnTrades" class="p-tab-btn" onclick="switchPortfolioTab('trades')">📜 成交流水明细 (<span id="tabTradesCount">0</span>)</button>
+      </div>
+
+      <!-- 持仓列表 Tab -->
+      <div id="tabContentHoldings">
+        <div style="overflow-x: auto;">
+          <table class="portfolio-table">
+            <thead>
+              <tr>
+                <th>标的代码/简称</th>
+                <th>持仓股数</th>
+                <th>成本均价</th>
+                <th>最新现价</th>
+                <th>持仓市值</th>
+                <th>浮动盈亏</th>
+                <th>仓位占比</th>
+                <th>策略标签 / 评级</th>
+                <th style="min-width: 150px;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="portfolioTableBody">
+              <tr>
+                <td colspan="9" style="text-align: center; color: var(--text-muted); padding: 36px 0; line-height: 1.8;">
+                  💼 <strong>当前模拟实盘账户为空仓</strong>（可用现金 ¥1,000,000.00）。<br>
+                  <span style="font-size: 12px; color: var(--text-sub);">
+                    💡 <strong>投研与持仓完全独立</strong>：在上方分析任何股票仅产出研报与量化指标，<strong>绝不会自动修改或替换您的持仓</strong>。<br>
+                    若需建仓，请在上方研报完成后点击【🚀 确认按 Agent 决策买入建仓】，或点击右上角【➕ 手动委托下单】。
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 流水记录 Tab -->
+      <div id="tabContentTrades" style="display: none;">
+        <div style="overflow-x: auto;">
+          <table class="portfolio-table">
+            <thead>
+              <tr>
+                <th>成交时间</th>
+                <th>订单流水号</th>
+                <th>标的简称</th>
+                <th>方向</th>
+                <th>成交均价</th>
+                <th>成交股数</th>
+                <th>成交金额</th>
+                <th>实现盈亏</th>
+                <th>策略备注 / 交易理由</th>
+              </tr>
+            </thead>
+            <tbody id="tradesTableBody">
+              <tr>
+                <td colspan="9" style="text-align: center; color: var(--text-muted); padding: 30px 0;">暂无历史交易流水</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 手动委托下单弹窗 -->
+    <div id="manualOrderModal" class="modal-overlay" onclick="closeManualOrderModal(event)">
+      <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-title">
+          <span>手动委托下单</span>
+          <button onclick="closeManualOrderModal()" style="border:none; background:none; cursor:pointer; font-size:16px;">✕</button>
+        </div>
+        <div class="form-group">
+          <label>交易动作</label>
+          <div style="display: flex; gap: 14px; margin-top: 4px;">
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; font-weight:600;">
+              <input type="radio" name="orderAction" value="BUY" checked onchange="onOrderActionChange()"> 🟢 买入 (加仓)
+            </label>
+            <label style="display:flex; align-items:center; gap:5px; cursor:pointer; font-weight:600;">
+              <input type="radio" name="orderAction" value="SELL" onchange="onOrderActionChange()"> 🔴 卖出 (平仓)
+            </label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>标的代码 (A股代码如 600519 或美股 Ticker 如 AAPL)</label>
+          <input type="text" id="modalTickerInput" class="form-input" placeholder="例如: 600519" onblur="fetchModalQuote()">
+          <div id="modalTickerHint" style="font-size: 11px; color: var(--text-sub); margin-top: 3px;">失焦后自动拉取现价</div>
+        </div>
+        <div class="form-group">
+          <label>委托股数 (A股以 100 股为一手)</label>
+          <input type="number" id="modalSharesInput" class="form-input" placeholder="100" value="100" step="100" min="1" oninput="calcOrderEst()">
+          <div style="display: flex; gap: 6px; margin-top: 6px;">
+            <button class="preset-btn" type="button" onclick="setModalShares(100)">100股</button>
+            <button class="preset-btn" type="button" onclick="setModalShares(300)">300股</button>
+            <button class="preset-btn" type="button" onclick="setModalShares(500)">500股</button>
+            <button class="preset-btn" type="button" onclick="setModalShares(1000)">1000股</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>预估成交现价与总额</label>
+          <div id="modalEstAmount" style="font-size: 14px; font-weight: 700; color: var(--accent-primary); margin-top: 2px;">--</div>
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+          <button class="preset-btn" type="button" onclick="closeManualOrderModal()">取消</button>
+          <button class="btn-analyze" type="button" style="padding: 6px 18px;" onclick="submitManualOrder()">确认委托下单</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 大模型 (LLM) API Key 与网关设置弹窗 -->
+    <div id="llmConfigModal" class="modal-overlay" onclick="closeLlmConfigModal(event)">
+      <div class="modal-box" style="width: 530px; max-width: 95vw;" onclick="event.stopPropagation()">
+        <div class="modal-title">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 20px;">⚙️</span>
+            <span>大模型 (LLM) API Key 与网关设置</span>
+          </div>
+          <button onclick="closeLlmConfigModal()" style="border:none; background:none; cursor:pointer; font-size:18px;">✕</button>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 14px; line-height: 1.5;">
+          在此配置云端大模型接口密钥。保存后将<strong>即时热更新生效</strong>（无需重启后端），所有投委会 Agent（宏观、基本面、技术面、多空辩论对决及终审仲裁）均将实时调用云端模型推理。
+        </div>
+
+        <!-- 快速提供商预设 -->
+        <div class="form-group">
+          <label>⚡ 快速选择模型服务商预设：</label>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+            <button type="button" class="preset-btn" onclick="selectLlmPreset('deepseek')">🚀 DeepSeek 官方</button>
+            <button type="button" class="preset-btn" onclick="selectLlmPreset('qwen')">☁️ 阿里通义千问</button>
+            <button type="button" class="preset-btn" onclick="selectLlmPreset('openai')">🌟 OpenAI 官方/中转</button>
+            <button type="button" class="preset-btn" onclick="selectLlmPreset('custom')">🛠️ 自定义兼容网关</button>
+          </div>
+        </div>
+
+        <!-- API Key 输入框带显隐眼睛 -->
+        <div class="form-group">
+          <label>API Key (密钥，必填)</label>
+          <div style="display: flex; gap: 6px;">
+            <input type="password" id="inputLlmApiKey" class="form-input" placeholder="输入 sk-xxxxxxxxxxxxxxxxxxxxxxxx" style="flex: 1; font-family: var(--font-mono);">
+            <button type="button" class="preset-btn" onclick="toggleApiKeyVisibility()" id="btnToggleKeyVis" title="切换显示/隐藏">👁️</button>
+          </div>
+        </div>
+
+        <!-- API Base URL -->
+        <div class="form-group">
+          <label>API Base URL (接口服务地址)</label>
+          <input type="text" id="inputLlmBaseUrl" class="form-input" placeholder="例如: https://api.deepseek.com" style="font-family: var(--font-mono);">
+        </div>
+
+        <!-- Model Name -->
+        <div class="form-group">
+          <label>模型名称 (Model Identifier)</label>
+          <input type="text" id="inputLlmModel" class="form-input" placeholder="例如: deepseek-chat / deepseek-reasoner / qwen-plus" style="font-family: var(--font-mono);">
+        </div>
+
+        <!-- Temperature -->
+        <div class="form-group">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <label style="margin-bottom: 0;">采样温度 (Temperature)</label>
+            <span id="labelLlmTemp" style="font-size: 12px; font-weight: 600; font-family: var(--font-mono);">0.2</span>
+          </div>
+          <input type="range" id="sliderLlmTemp" min="0.0" max="1.0" step="0.05" value="0.2" class="weight-slider" oninput="onLlmTempChange()">
+        </div>
+
+        <!-- 连通性测试结果面板 -->
+        <div id="llmTestResultBox" style="margin-top: 14px; padding: 10px 12px; border-radius: var(--radius-sm); font-size: 12px; line-height: 1.4; display: none;"></div>
+
+        <!-- 弹窗底部操作按钮 -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px;">
+          <button type="button" class="preset-btn" onclick="testLlmConnection()" id="btnTestLlm" style="display: inline-flex; align-items: center; gap: 4px;">
+            🔌 测试连接
+          </button>
+          <div style="display: flex; gap: 10px;">
+            <button type="button" class="preset-btn" onclick="closeLlmConfigModal()">取消</button>
+            <button type="button" class="btn-analyze" style="padding: 6px 20px;" onclick="saveLlmConfig()" id="btnSaveLlm">
+              💾 保存并生效
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 深度投研研报排版区域 -->
+    <section class="report-card">
+      <div class="card-title">
+        <span>机构级深度投研分析报告 (Markdown 视图)</span>
+        <button class="preset-btn" onclick="copyReport()">📋 复制研报全文</button>
+      </div>
+      <div id="reportContainer" class="report-content">
+        <p style="color: var(--text-sub); text-align: center; padding: 40px 0;">点击上方【发起投研】，多智能体将自动生成专业研报...</p>
+      </div>
+    </section>
+
+    <!-- 投委会资深 AI 投顾实时深度多轮追问对话卡片 (Chat with Advisor) -->
+    <section class="chat-card" id="chatSection">
+      <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span>💬 投委会资深 AI 投顾实时多轮深度追问</span>
+          <span id="chatStockBadge" class="badge badge-accent">标的追问中</span>
+          <span style="font-size: 11px; color: var(--text-muted); font-weight: normal;">已深度关联上方研报事实、主力资金与量化模型</span>
+        </div>
+        <button class="preset-btn" onclick="clearChatHistory()">🧹 清空对话记录</button>
+      </div>
+
+      <!-- 常用追问快捷气泡 -->
+      <div class="quick-questions">
+        <span style="font-size: 11px; color: var(--text-sub);">💡 快捷追问气泡：</span>
+        <button type="button" class="quick-q-btn" onclick="askQuickQuestion('这只股票近期的主力资金流向是在洗盘还是诱多出货？')">资金流是洗盘还是出货？</button>
+        <button type="button" class="quick-q-btn" onclick="askQuickQuestion('如果明天大盘深跌，这只股票的核心防守支撑位看多少？跌破该怎么止损？')">跌破支撑位如何止损？</button>
+        <button type="button" class="quick-q-btn" onclick="askQuickQuestion('用通俗易懂的大白话给我解释一下，投委会终审为什么建议这个仓位？')">大白话解释建议仓位</button>
+        <button type="button" class="quick-q-btn" onclick="askQuickQuestion('如果我现在分批建仓，第一笔底仓应该在什么价位打入比较稳妥？')">分批建仓买入点位建议</button>
+      </div>
+
+      <!-- 问答流消息列表 -->
+      <div id="chatMessages" class="chat-messages-container">
+        <div class="chat-bubble assistant">
+          <div class="chat-avatar">🤖</div>
+          <div class="chat-body">
+            <strong>资深投顾：</strong>
+            <p>你好！我是投委会资深投资顾问。我已经通读了上方为你生成的全套研报与量化指标。你对这只股票的<strong>买卖点、主力资金意图、止损防守位或仓位配置</strong>有任何疑问，都可以直接在下方问我！我会用接地气的大白话为你深入解答。</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 问答输入框条 -->
+      <div class="chat-input-row">
+        <input type="text" id="chatInput" class="form-input" placeholder="输入你想追问的问题（如：'止损位怎么设？'、'主力是在出货吗？'）..." onkeydown="if(event.key==='Enter') sendChatMessage()">
+        <button id="btnSendChat" class="btn-analyze" style="width: 100px; padding: 0;" onclick="sendChatMessage()">
+          发送 ↵
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    let currentStyle = 'balanced';
+
+    const PRESET_WEIGHTS = {
+      balanced: { fund: 40, tech: 35, macro: 15, flow: 10 },
+      momentum: { fund: 15, tech: 60, macro: 10, flow: 15 },
+      deep_value: { fund: 65, tech: 15, macro: 15, flow: 5 },
+      short_term: { fund: 10, tech: 50, macro: 10, flow: 30 }
+    };
+
+    function selectStrategyStyle(style) {
+      currentStyle = style;
+      const btns = {
+        'balanced': 'btnStyleBalanced',
+        'momentum': 'btnStyleMomentum',
+        'deep_value': 'btnStyleDeepValue',
+        'short_term': 'btnStyleShortTerm',
+        'custom': 'btnStyleCustom'
+      };
+
+      Object.entries(btns).forEach(([k, id]) => {
+        const btn = document.getElementById(id);
+        if (btn) {
+          if (k === style) btn.classList.add('active');
+          else btn.classList.remove('active');
+        }
+      });
+
+      if (PRESET_WEIGHTS[style]) {
+        const w = PRESET_WEIGHTS[style];
+        document.getElementById('sliderWeightFund').value = w.fund;
+        document.getElementById('sliderWeightTech').value = w.tech;
+        document.getElementById('sliderWeightMacro').value = w.macro;
+        document.getElementById('sliderWeightFlow').value = w.flow;
+        updateWeightLabels();
+      }
+    }
+
+    function toggleCustomSliders() {
+      selectStrategyStyle('custom');
+    }
+
+    function onWeightSliderChange() {
+      // 当手动微调滑块时，自动将策略样式切为自定义
+      currentStyle = 'custom';
+      ['btnStyleBalanced', 'btnStyleMomentum', 'btnStyleDeepValue', 'btnStyleShortTerm'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.classList.remove('active');
+      });
+      const cBtn = document.getElementById('btnStyleCustom');
+      if (cBtn) cBtn.classList.add('active');
+      updateWeightLabels();
+    }
+
+    function updateWeightLabels() {
+      const fund = document.getElementById('sliderWeightFund').value;
+      const tech = document.getElementById('sliderWeightTech').value;
+      const macro = document.getElementById('sliderWeightMacro').value;
+      const flow = document.getElementById('sliderWeightFlow').value;
+
+      document.getElementById('labelWeightFund').textContent = `${fund}%`;
+      document.getElementById('labelWeightTech').textContent = `${tech}%`;
+      document.getElementById('labelWeightMacro').textContent = `${macro}%`;
+      document.getElementById('labelWeightFlow').textContent = `${flow}%`;
+    }
+
+    function setTicker(code, name) {
+      document.getElementById('tickerInput').value = code;
+    }
+
+    function resetUI() {
+      ['node_init', 'node_macro', 'node_fund', 'node_tech', 'node_debate', 'node_risk', 'node_report'].forEach(id => {
+        const el = document.getElementById(id);
+        el.className = 'node-item';
+        el.querySelector('.node-status').textContent = '待命';
+      });
+      document.getElementById('bullText').textContent = '正在由多头辩手构筑阿尔法进攻论点与催化剂...';
+      document.getElementById('bearText').textContent = '正在由空头辩手进行穿透式风险质疑与脆弱点剖析...';
+      document.getElementById('verdictText').textContent = '仲裁对质中...';
+      document.getElementById('verdictText').style.color = '';
+      document.getElementById('verdictReason').textContent = '';
+      document.getElementById('intelBanner').style.display = 'none';
+      document.getElementById('debateRoundNav').style.display = 'none';
+      document.getElementById('battlegroundBanner').style.display = 'none';
+      document.getElementById('verdictContradictionBox').style.display = 'none';
+      document.getElementById('runStatus').textContent = '执行中...';
+      document.getElementById('reportContainer').innerHTML = '<p style="color: var(--text-sub); text-align: center; padding: 40px 0;">多智能体正在深度研读财报、资金面与技术特征，请稍候...</p>';
+    }
+
+    async function startAnalysis() {
+      const ticker = document.getElementById('tickerInput').value.trim() || '600519';
+      const customQuery = document.getElementById('queryInput').value.trim();
+      const btn = document.getElementById('btnRun');
+      btn.disabled = true;
+
+      resetUI();
+      document.getElementById('tickerDisplay').textContent = ticker;
+
+      // 提取四个维度的自定义权重 (归一化交由后端自动计算)
+      const fundWeight = parseFloat(document.getElementById('sliderWeightFund').value) / 100;
+      const techWeight = parseFloat(document.getElementById('sliderWeightTech').value) / 100;
+      const macroWeight = parseFloat(document.getElementById('sliderWeightMacro').value) / 100;
+      const flowWeight = parseFloat(document.getElementById('sliderWeightFlow').value) / 100;
+
+      // 1. 先抓取基础行情填充面板
+      try {
+        const qRes = await fetch(`/finance/quote/${ticker}`);
+        if (qRes.ok) {
+          const qData = await qRes.json();
+          document.getElementById('statPrice').textContent = `${qData.current_price} 元`;
+          document.getElementById('statPePb').textContent = `PE: ${qData.pe_ttm} | PB: ${qData.pb_ratio}`;
+        }
+      } catch (e) {
+        console.warn('获取前置行情轻量失败:', e);
+      }
+
+      // 2. 开启 SSE 流式监听
+      try {
+        const response = await fetch('/finance/analyze/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            ticker: ticker, 
+            custom_query: customQuery, 
+            enable_debate: true,
+            strategy_style: currentStyle,
+            fundamental_weight: fundWeight,
+            technical_weight: techWeight,
+            macro_weight: macroWeight,
+            capital_flow_weight: flowWeight
+          })
+        });
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const rawJson = line.substring(6).trim();
+              if (!rawJson) continue;
+              const evt = JSON.parse(rawJson);
+              handleStreamEvent(evt);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('SSE Stream error:', err);
+        document.getElementById('runStatus').textContent = '连接中断';
+      } finally {
+        btn.disabled = false;
+        document.getElementById('runStatus').textContent = '分析已完成';
+      }
+    }
+
+    function handleStreamEvent(evt) {
+      if (evt.event === 'node_update') {
+        const nodeMap = {
+          'init_data_node': 'node_init',
+          'macro_node': 'node_macro',
+          'fundamental_node': 'node_fund',
+          'technical_node': 'node_tech',
+          'bull_node': 'node_debate',
+          'bear_node': 'node_debate',
+          'arbiter_node': 'node_debate',
+          'risk_node': 'node_risk',
+          'reporter_node': 'node_report'
+        };
+
+        const targetId = nodeMap[evt.node];
+        if (targetId) {
+          const el = document.getElementById(targetId);
+          el.className = 'node-item done';
+          el.querySelector('.node-status').textContent = '完成';
+        }
+
+        if (evt.bull_score) {
+          document.getElementById('bullScoreBadge').textContent = `得分: ${evt.bull_score}`;
+        }
+        if (evt.bull_argument) {
+          document.getElementById('bullText').innerHTML = marked.parse(evt.bull_argument);
+        }
+        if (evt.bear_score) {
+          document.getElementById('bearScoreBadge').textContent = `风险分: ${evt.bear_score}`;
+        }
+        if (evt.bear_argument) {
+          document.getElementById('bearText').innerHTML = marked.parse(evt.bear_argument);
+        }
+        if (evt.debate_round) {
+          document.getElementById('debateRoundBadge').textContent = `Round ${evt.debate_round}`;
+        }
+        if (evt.verdict) {
+          document.getElementById('verdictText').textContent = evt.verdict;
+        }
+      } else if (evt.event === 'completed') {
+        const data = evt.data;
+        // 渲染量化看板
+        document.getElementById('statPrice').textContent = `${data.current_price} 元`;
+        document.getElementById('statDcfMargin').textContent = `安全边际: ${data.dcf_margin_of_safety}%`;
+        document.getElementById('statVar').textContent = `${data.var_95_drawdown}%`;
+        document.getElementById('verdictText').textContent = data.verdict;
+        document.getElementById('positionText').textContent = data.target_position;
+
+        // 渲染全部确定性指标卡
+        if (data.dupont_roe !== undefined) document.getElementById('statRoe').textContent = `${data.dupont_roe}%`;
+        if (data.net_margin !== undefined) document.getElementById('statNetMargin').textContent = `净利率: ${data.net_margin}%`;
+        if (data.dcf_value !== undefined) document.getElementById('statDcfValue').textContent = `${data.dcf_value} 元`;
+        if (data.rsi_14 !== undefined) document.getElementById('statRsi').textContent = data.rsi_14;
+        if (data.macd_bar !== undefined) document.getElementById('statMacd').textContent = `MACD柱: ${data.macd_bar}`;
+        if (data.var_absolute_loss !== undefined) document.getElementById('statVarLoss').textContent = `预期每股损失: ${data.var_absolute_loss} 元`;
+        if (data.trend_signal) document.getElementById('statSignal').textContent = data.trend_signal;
+        if (data.support_level && data.resistance_level) {
+          document.getElementById('statSupport').textContent = `支撑: ${data.support_level} | 阻力: ${data.resistance_level}`;
+        }
+
+        // 终审决议判定原因说明
+        if (data.is_vetoed) {
+          const reasons = (data.audit_details && data.audit_details.veto_reasons && data.audit_details.veto_reasons.length > 0) 
+            ? data.audit_details.veto_reasons.join('；') 
+            : '触碰合规风控硬红线';
+          document.getElementById('verdictReason').innerHTML = `<span style="color: var(--bear-red); font-weight:600;">⛔ 一票否决硬触发依据：</span><span style="color: var(--text-main);">${reasons}</span>`;
+          document.getElementById('verdictText').style.color = 'var(--bear-red)';
+        } else {
+          document.getElementById('verdictReason').innerHTML = `<span style="color: var(--bull-green); font-weight:600;">✅ 合规风控硬规则穿透通过</span> · 无触碰资产负债率或在险损失红线，依多空博弈共识出具仓位`;
+          document.getElementById('verdictText').style.color = '';
+        }
+
+        // 渲染风控
+        const riskBadge = document.getElementById('riskStatusBadge');
+        riskBadge.textContent = data.risk_status;
+        riskBadge.className = `risk-tag ${data.risk_status}`;
+
+        if (data.audit_details && data.audit_details.audit_checklist) {
+          let checkHtml = '';
+          for (const [k, v] of Object.entries(data.audit_details.audit_checklist)) {
+            checkHtml += `• ${k}: ${v}<br>`;
+          }
+          document.getElementById('riskChecklist').innerHTML = checkHtml;
+        }
+
+        // 1. 渲染多源事实情报看板 (Grounding Intel)
+        if (data.market_intel) {
+          const intel = data.market_intel;
+          const banner = document.getElementById('intelBanner');
+          if (banner) {
+            banner.style.display = 'block';
+            const flowBadge = document.getElementById('intelFlowBadge');
+            flowBadge.textContent = intel.main_capital_flow || '主力资金平稳';
+            if (intel.main_capital_flow && (intel.main_capital_flow.includes('净流入') || intel.main_capital_flow.includes('+'))) {
+              flowBadge.className = 'intel-flow-badge intel-flow-pos';
+            } else if (intel.main_capital_flow && (intel.main_capital_flow.includes('净流出') || intel.main_capital_flow.includes('-'))) {
+              flowBadge.className = 'intel-flow-badge intel-flow-neg';
+            } else {
+              flowBadge.className = 'intel-flow-badge';
+            }
+
+            const annoList = document.getElementById('intelAnnouncementsList');
+            if (intel.announcements && intel.announcements.length > 0) {
+              annoList.innerHTML = intel.announcements.slice(0, 4).map(a => 
+                `<div class="intel-item" title="${a.title}">• [${a.date}] ${a.title}</div>`
+              ).join('');
+            } else {
+              annoList.innerHTML = '<div class="intel-item">• 近期暂无官方重大异动披露</div>';
+            }
+
+            const newsList = document.getElementById('intelNewsList');
+            if (intel.news_headlines && intel.news_headlines.length > 0) {
+              newsList.innerHTML = intel.news_headlines.slice(0, 4).map(n => 
+                `<div class="intel-item" title="${n.title}">• [${n.time || '快讯'}] ${n.title}</div>`
+              ).join('');
+            } else {
+              newsList.innerHTML = '<div class="intel-item">• 市场滚动快讯平稳</div>';
+            }
+          }
+        }
+
+        // 2. 渲染投委会红蓝军多轮对抗记录 (带轮次导航与交锋焦点)
+        if (data.debate_history && data.debate_history.length > 0) {
+          window._currentDebateHistory = data.debate_history;
+          const nav = document.getElementById('debateRoundNav');
+          if (nav) {
+            nav.style.display = 'flex';
+            nav.innerHTML = data.debate_history.map((turn, idx) => 
+              `<button class="round-nav-btn ${idx === data.debate_history.length - 1 ? 'active' : ''}" onclick="switchDebateRound(${idx})">第 ${turn.round_index} 轮: ${turn.stage_name || '攻防'}</button>`
+            ).join('');
+          }
+          switchDebateRound(data.debate_history.length - 1);
+        }
+
+        // 3. 渲染投委会核心矛盾对立面与非对称盈亏比
+        if (data.arbiter_verdict) {
+          const cBox = document.getElementById('verdictContradictionBox');
+          if (cBox) {
+            cBox.style.display = 'grid';
+            document.getElementById('verdictContradiction').textContent = data.arbiter_verdict.core_contradiction || '估值安全边际 vs 均线形态阻力';
+            document.getElementById('verdictRiskReward').textContent = data.arbiter_verdict.risk_reward_ratio || '盈亏比 2.2:1';
+          }
+        }
+
+        // 渲染 Markdown 研报
+        if (data.full_report_md) {
+          document.getElementById('reportContainer').innerHTML = marked.parse(data.full_report_md);
+        }
+
+        // 缓存本次分析成果并唤出模拟盘一键建仓条
+        currentAnalysisResult = data;
+        const tCode = data.ticker || document.getElementById('tickerInput').value.trim();
+        const tName = data.target_name || tCode;
+
+        // 同步更新 AI 投顾追问面板的标的 Badge
+        const chatBadge = document.getElementById('chatStockBadge');
+        if (chatBadge) {
+          chatBadge.textContent = `${tName} (${tCode})`;
+        }
+
+        const tradeBanner = document.getElementById('agentTradeBanner');
+        if (tradeBanner) {
+          tradeBanner.style.display = 'flex';
+          const hint = document.getElementById('agentTradeHint');
+          hint.innerHTML = `当前分析标的: <strong>${tName} (${tCode})</strong> · 投委会裁决: <strong>[${data.verdict || '推荐'}]</strong> · 建议配置: <strong>${data.target_position || '20%~30%'}</strong> <span style="color:var(--text-sub); margin-left:6px;">(仅为决策参考；若不点击右侧按钮，实盘模拟持仓绝不会改变)</span>`;
+        }
+      }
+    }
+
+    function switchDebateRound(index) {
+      if (!window._currentDebateHistory || !window._currentDebateHistory[index]) return;
+      const turn = window._currentDebateHistory[index];
+      
+      // 更新导航按钮状态
+      const btns = document.querySelectorAll('.round-nav-btn');
+      btns.forEach((b, i) => {
+        if (i === index) b.classList.add('active');
+        else b.classList.remove('active');
+      });
+
+      document.getElementById('debateRoundBadge').textContent = `Round ${turn.round_index} · ${turn.stage_name || ''}`;
+      
+      const bBanner = document.getElementById('battlegroundBanner');
+      if (bBanner && turn.battleground_issue) {
+        bBanner.style.display = 'flex';
+        document.getElementById('battlegroundText').textContent = turn.battleground_issue;
+      }
+
+      document.getElementById('bullText').innerHTML = marked.parse(turn.bull_thesis);
+      document.getElementById('bearText').innerHTML = marked.parse(turn.bear_antithesis);
+      document.getElementById('bullScoreBadge').textContent = `得分: ${turn.bull_score}`;
+      document.getElementById('bearScoreBadge').textContent = `风险分: ${turn.bear_score}`;
+    }
+
+    function copyReport() {
+      const container = document.getElementById('reportContainer');
+      navigator.clipboard.writeText(container.innerText);
+      alert('研报文本已成功复制到剪贴板！');
+    }
+
+    // =========================================================================
+    // 投委会资深 AI 投顾深度多轮追问交互模块 (Chat with Advisor)
+    // =========================================================================
+    let chatHistory = [];
+
+    function escapeHtml(text) {
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+      return text.replace(/[&<>"']/g, m => map[m]);
+    }
+
+    function askQuickQuestion(q) {
+      document.getElementById('chatInput').value = q;
+      sendChatMessage();
+    }
+
+    function clearChatHistory() {
+      chatHistory = [];
+      const container = document.getElementById('chatMessages');
+      const ticker = document.getElementById('tickerInput').value.trim() || '600519';
+      const tName = currentAnalysisResult?.target_name || ticker;
+      container.innerHTML = `
+        <div class="chat-bubble assistant">
+          <div class="chat-avatar">🤖</div>
+          <div class="chat-body">
+            <strong>资深投顾：</strong>
+            <p>已重置对话。关于标的 <strong>${tName} (${ticker})</strong>，请告诉我你的最新疑问，我会结合全套投研研报与量化特征为你深入剖析！</p>
+          </div>
+        </div>
+      `;
+    }
+
+    async function sendChatMessage() {
+      const input = document.getElementById('chatInput');
+      const question = input.value.trim();
+      if (!question) return;
+
+      const ticker = document.getElementById('tickerInput').value.trim() || '600519';
+      const tName = currentAnalysisResult?.target_name || ticker;
+      const reportContext = currentAnalysisResult?.full_report_md || document.getElementById('reportContainer').innerText;
+
+      // 1. 渲染用户提问气泡
+      const container = document.getElementById('chatMessages');
+      const userBubble = document.createElement('div');
+      userBubble.className = 'chat-bubble user';
+      userBubble.innerHTML = `
+        <div class="chat-avatar">👤</div>
+        <div class="chat-body">
+          <strong>我：</strong>
+          <p>${escapeHtml(question)}</p>
+        </div>
+      `;
+      container.appendChild(userBubble);
+      input.value = '';
+      container.scrollTop = container.scrollHeight;
+
+      // 2. 准备助手回答气泡
+      const botBubble = document.createElement('div');
+      botBubble.className = 'chat-bubble assistant';
+      botBubble.innerHTML = `
+        <div class="chat-avatar">🤖</div>
+        <div class="chat-body">
+          <strong>资深投顾：</strong>
+          <div class="bot-msg-content">⏳ 思考中...</div>
+        </div>
+      `;
+      container.appendChild(botBubble);
+      container.scrollTop = container.scrollHeight;
+      const msgContentEl = botBubble.querySelector('.bot-msg-content');
+
+      const btn = document.getElementById('btnSendChat');
+      btn.disabled = true;
+      btn.textContent = '生成中...';
+
+      let fullReply = '';
+
+      try {
+        const response = await fetch('/finance/chat/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ticker: ticker,
+            target_name: tName,
+            question: question,
+            report_context: reportContext,
+            history: chatHistory
+          })
+        });
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const raw = line.substring(6).trim();
+              if (raw === '[DONE]') break;
+              try {
+                const parsed = JSON.parse(raw);
+                if (parsed.text) {
+                  fullReply += parsed.text;
+                  msgContentEl.innerHTML = marked.parse(fullReply);
+                  container.scrollTop = container.scrollHeight;
+                }
+              } catch (e) {}
+            }
+          }
+        }
+
+        chatHistory.push({ role: 'user', content: question });
+        chatHistory.push({ role: 'assistant', content: fullReply });
+      } catch (err) {
+        msgContentEl.innerHTML = `<span style="color:var(--bear-red);">请求发生异常: ${err.message}</span>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '发送 ↵';
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
+    // =========================================================================
+    // 模拟盘 (Paper Trading) 核心交互模块
+    // =========================================================================
+    let currentAnalysisResult = null;
+    let modalCurrentPrice = 0;
+
+    async function executeAgentAutoBuy() {
+      if (!currentAnalysisResult) {
+        alert('请先完成一次标的投研分析，再发起一键建仓！');
+        return;
+      }
+      const ticker = currentAnalysisResult.ticker || document.getElementById('tickerInput').value.trim();
+      const btn = document.getElementById('btnAgentBuy');
+      btn.disabled = true;
+      btn.textContent = '⏳ 正在撮合建仓...';
+
+      try {
+        const res = await fetch('/finance/portfolio/agent-buy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ticker: ticker,
+            strategy_style: currentStyle,
+            verdict: currentAnalysisResult.verdict || '强烈推荐',
+            reason: `依据 Agent 投委会决策 [${currentAnalysisResult.verdict}] 智能建仓`
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '建仓失败');
+
+        alert(`🎉 ${data.message}`);
+        await loadPortfolioSummary(false);
+        // 平滑滚动至模拟盘视口
+        document.querySelector('.portfolio-card')?.scrollIntoView({ behavior: 'smooth' });
+      } catch (err) {
+        alert(`建仓未成功: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🚀 确认按 Agent 决策买入建仓';
+      }
+    }
+
+    async function loadPortfolioSummary(refresh = false) {
+      try {
+        const res = await fetch(`/finance/portfolio?refresh=${refresh}`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // 渲染核心 KPI
+        document.getElementById('pTotalAssets').textContent = `¥${data.total_assets.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        document.getElementById('pCash').textContent = `¥${data.cash.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        document.getElementById('pMarketValue').textContent = `¥${data.market_value.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        document.getElementById('pInitialCap').textContent = `初始本金: ¥${data.initial_capital.toLocaleString('zh-CN')}`;
+        document.getElementById('pPosCount').textContent = `持仓标的: ${data.positions_count} 只`;
+        document.getElementById('pTotalTrades').textContent = `总成交: ${data.total_trades} 笔`;
+        document.getElementById('pWinRate').textContent = `${data.win_rate.toFixed(1)}%`;
+
+        const retSign = data.total_pnl_pct >= 0 ? '+' : '';
+        const retEl = document.getElementById('pTotalReturn');
+        retEl.textContent = `收益率: ${retSign}${data.total_pnl_pct.toFixed(2)}%`;
+        retEl.style.color = data.total_pnl_pct >= 0 ? 'var(--bear-red)' : 'var(--bull-green)';
+
+        const pnlSign = data.total_pnl >= 0 ? '+' : '';
+        const pnlEl = document.getElementById('pTotalPnl');
+        pnlEl.textContent = `¥${pnlSign}${data.total_pnl.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        pnlEl.style.color = data.total_pnl >= 0 ? 'var(--bear-red)' : 'var(--bull-green)';
+
+        document.getElementById('tabHoldingsCount').textContent = data.positions_count;
+        document.getElementById('tabTradesCount').textContent = data.recent_trades.length;
+
+        // 渲染持仓明细表格
+        const tbody = document.getElementById('portfolioTableBody');
+        if (!data.positions || data.positions.length === 0) {
+          tbody.innerHTML = `
+            <tr>
+              <td colspan="9" style="text-align: center; color: var(--text-muted); padding: 36px 0; line-height: 1.8;">
+                💼 <strong>当前模拟实盘账户为空仓</strong>（可用现金 ¥${data.cash.toLocaleString('zh-CN', {minimumFractionDigits: 2})}）。<br>
+                <span style="font-size: 12px; color: var(--text-sub);">
+                  💡 <strong>投研与持仓完全独立</strong>：在上方分析任何股票仅产出研报与量化指标，<strong>绝不会自动修改或替换您的持仓</strong>。<br>
+                  若需建仓，请在上方研报完成后点击【🚀 确认按 Agent 决策买入建仓】，或点击右上角【➕ 手动委托下单】。
+                </span>
+              </td>
+            </tr>
+          `;
+        } else {
+          tbody.innerHTML = data.positions.map(p => {
+            const pnlClass = p.unrealized_pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+            const pnlPrefix = p.unrealized_pnl >= 0 ? '+' : '';
+            return `
+              <tr>
+                <td><strong>${p.name}</strong><br><span style="font-size:11px; color:var(--text-muted); font-family:var(--font-mono);">${p.ticker}</span></td>
+                <td style="font-family:var(--font-mono);">${p.shares.toLocaleString()}</td>
+                <td style="font-family:var(--font-mono);">¥${p.avg_cost.toFixed(2)}</td>
+                <td style="font-family:var(--font-mono); font-weight:600;">¥${p.current_price.toFixed(2)}</td>
+                <td style="font-family:var(--font-mono);">¥${p.market_value.toLocaleString('zh-CN', {minimumFractionDigits: 2})}</td>
+                <td class="${pnlClass}" style="font-family:var(--font-mono);">
+                  ${pnlPrefix}¥${p.unrealized_pnl.toLocaleString('zh-CN', {minimumFractionDigits: 2})}<br>
+                  <span style="font-size:11px;">(${pnlPrefix}${p.unrealized_pnl_pct.toFixed(2)}%)</span>
+                </td>
+                <td style="font-family:var(--font-mono);">${p.position_pct}%</td>
+                <td>
+                  <span class="badge-strategy">${p.strategy_tag}</span><br>
+                  <span style="font-size:11px; color:var(--text-sub);">${p.recommendation}</span>
+                </td>
+                <td>
+                  <button class="act-btn buy" onclick="openManualOrderModal('BUY', '${p.ticker}')">加仓</button>
+                  <button class="act-btn sell" onclick="sellPosition('${p.ticker}')">平仓</button>
+                  <button class="act-btn re-analyze" onclick="reAnalyzeTicker('${p.ticker}')">复盘</button>
+                </td>
+              </tr>
+            `;
+          }).join('');
+        }
+
+        // 渲染成交明细流水
+        const tBodyTrades = document.getElementById('tradesTableBody');
+        if (!data.recent_trades || data.recent_trades.length === 0) {
+          tBodyTrades.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 30px 0;">暂无历史交易流水</td></tr>`;
+        } else {
+          tBodyTrades.innerHTML = data.recent_trades.map(t => {
+            const actColor = t.action === 'BUY' ? 'var(--bear-red)' : 'var(--bull-green)';
+            const actLabel = t.action === 'BUY' ? '买入' : '卖出';
+            const pnlText = t.action === 'SELL' ? `¥${t.realized_pnl >= 0 ? '+' : ''}${t.realized_pnl.toFixed(2)}` : '--';
+            const pnlStyle = t.realized_pnl > 0 ? 'color:var(--bear-red); font-weight:600;' : (t.realized_pnl < 0 ? 'color:var(--bull-green); font-weight:600;' : 'color:var(--text-muted);');
+            return `
+              <tr>
+                <td style="font-size:11px; color:var(--text-muted);">${t.timestamp}</td>
+                <td style="font-family:var(--font-mono); font-size:11px;">${t.order_id}</td>
+                <td><strong>${t.name}</strong> (${t.ticker})</td>
+                <td style="color:${actColor}; font-weight:600;">${actLabel}</td>
+                <td style="font-family:var(--font-mono);">¥${t.price.toFixed(2)}</td>
+                <td style="font-family:var(--font-mono);">${t.shares.toLocaleString()}</td>
+                <td style="font-family:var(--font-mono);">¥${t.amount.toLocaleString('zh-CN', {minimumFractionDigits: 2})}</td>
+                <td style="${pnlStyle} font-family:var(--font-mono);">${pnlText}</td>
+                <td style="font-size:12px; color:var(--text-muted); max-width:220px;" title="${t.reason}">${t.reason}</td>
+              </tr>
+            `;
+          }).join('');
+        }
+
+      } catch (err) {
+        console.warn('获取模拟盘概览失败:', err);
+      }
+    }
+
+    async function sellPosition(ticker) {
+      if (!confirm(`确定要平仓卖出标的 ${ticker} 的全部持仓吗？`)) return;
+      try {
+        const res = await fetch('/finance/portfolio/sell', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ticker: ticker })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '平仓失败');
+        alert(`✅ ${data.message}`);
+        await loadPortfolioSummary(false);
+      } catch (e) {
+        alert(`平仓失败: ${e.message}`);
+      }
+    }
+
+    function reAnalyzeTicker(ticker) {
+      document.getElementById('tickerInput').value = ticker;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      startAnalysis();
+    }
+
+    async function refreshPortfolioPrices() {
+      try {
+        const res = await fetch('/finance/portfolio/refresh-prices', { method: 'POST' });
+        if (!res.ok) throw new Error('行情刷新失败');
+        await loadPortfolioSummary(false);
+        alert('🔄 已同步最新市场收盘价，持仓市值与浮盈已重新计算！');
+      } catch (e) {
+        alert(`刷新失败: ${e.message}`);
+      }
+    }
+
+    async function resetPortfolioAccount() {
+      if (!confirm('⚠️ 警告：确定要重置模拟账户吗？所有持仓与历史流水将被清空，恢复初始 100 万元资金！')) return;
+      try {
+        const res = await fetch('/finance/portfolio/reset', { method: 'POST' });
+        if (!res.ok) throw new Error('重置失败');
+        await loadPortfolioSummary(false);
+        alert('🧹 模拟账户已成功重置为 1,000,000.00 元初始本金！');
+      } catch (e) {
+        alert(`重置失败: ${e.message}`);
+      }
+    }
+
+    function switchPortfolioTab(tab) {
+      const btnH = document.getElementById('tabBtnHoldings');
+      const btnT = document.getElementById('tabBtnTrades');
+      const cntH = document.getElementById('tabContentHoldings');
+      const cntT = document.getElementById('tabContentTrades');
+
+      if (tab === 'holdings') {
+        btnH.classList.add('active');
+        btnT.classList.remove('active');
+        cntH.style.display = 'block';
+        cntT.style.display = 'none';
+      } else {
+        btnH.classList.remove('active');
+        btnT.classList.add('active');
+        cntH.style.display = 'none';
+        cntT.style.display = 'block';
+      }
+    }
+
+    function openManualOrderModal(action = 'BUY', ticker = '') {
+      const modal = document.getElementById('manualOrderModal');
+      modal.style.display = 'flex';
+      document.getElementById('modalTickerInput').value = ticker || '';
+      document.getElementById('modalTickerHint').textContent = ticker ? '失焦后自动拉取现价' : '输入股票代码（如 600519、002594）失焦后拉取现价';
+      const radios = document.getElementsByName('orderAction');
+      radios.forEach(r => { r.checked = (r.value === action); });
+      if (ticker) fetchModalQuote();
+      else {
+        modalCurrentPrice = 0;
+        calcOrderEst();
+      }
+    }
+
+    function closeManualOrderModal(e) {
+      document.getElementById('manualOrderModal').style.display = 'none';
+    }
+
+    function setModalShares(n) {
+      document.getElementById('modalSharesInput').value = n;
+      calcOrderEst();
+    }
+
+    function onOrderActionChange() {
+      calcOrderEst();
+    }
+
+    async function fetchModalQuote() {
+      const t = document.getElementById('modalTickerInput').value.trim();
+      if (!t) return;
+      try {
+        const res = await fetch(`/finance/quote/${t}`);
+        if (res.ok) {
+          const q = await res.json();
+          modalCurrentPrice = q.current_price;
+          document.getElementById('modalTickerHint').textContent = `${q.name || t} · 最新现价: ¥${q.current_price} 元 (PE: ${q.pe_ttm})`;
+          calcOrderEst();
+        }
+      } catch (e) {
+        console.warn('拉取现价失败:', e);
+      }
+    }
+
+    function calcOrderEst() {
+      const s = parseInt(document.getElementById('modalSharesInput').value) || 0;
+      if (modalCurrentPrice > 0 && s > 0) {
+        const est = (modalCurrentPrice * s).toLocaleString('zh-CN', { minimumFractionDigits: 2 });
+        document.getElementById('modalEstAmount').textContent = `¥${est} 元 (单价: ¥${modalCurrentPrice.toFixed(2)})`;
+      } else {
+        document.getElementById('modalEstAmount').textContent = '--';
+      }
+    }
+
+    async function submitManualOrder() {
+      const action = document.querySelector('input[name="orderAction"]:checked')?.value || 'BUY';
+      const ticker = document.getElementById('modalTickerInput').value.trim();
+      const shares = parseInt(document.getElementById('modalSharesInput').value) || 0;
+
+      if (!ticker) { alert('请输入股票代码'); return; }
+      if (shares <= 0) { alert('委托股数必须大于 0'); return; }
+
+      try {
+        const endpoint = action === 'BUY' ? '/finance/portfolio/buy' : '/finance/portfolio/sell';
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ticker, shares })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '委托失败');
+
+        alert(`✅ ${data.message}`);
+        closeManualOrderModal();
+        await loadPortfolioSummary(false);
+      } catch (e) {
+        alert(`委托失败: ${e.message}`);
+      }
+    }
+
+    // =========================================================================
+    // 大模型 (LLM) API Key 与网关动态配置交互模块
+    // =========================================================================
+    const LLM_PRESETS = {
+      deepseek: {
+        base_url: 'https://api.deepseek.com',
+        model: 'deepseek-chat',
+        temp: 0.3
+      },
+      qwen: {
+        base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        model: 'qwen-plus',
+        temp: 0.2
+      },
+      openai: {
+        base_url: 'https://api.openai.com/v1',
+        model: 'gpt-4o-mini',
+        temp: 0.2
+      },
+      custom: {
+        base_url: '',
+        model: '',
+        temp: 0.2
+      }
+    };
+
+    let isApiKeyVisible = false;
+
+    function toggleApiKeyVisibility() {
+      const input = document.getElementById('inputLlmApiKey');
+      isApiKeyVisible = !isApiKeyVisible;
+      input.type = isApiKeyVisible ? 'text' : 'password';
+      document.getElementById('btnToggleKeyVis').textContent = isApiKeyVisible ? '🔒' : '👁️';
+    }
+
+    function selectLlmPreset(presetKey) {
+      const p = LLM_PRESETS[presetKey];
+      if (!p) return;
+      if (p.base_url) document.getElementById('inputLlmBaseUrl').value = p.base_url;
+      if (p.model) document.getElementById('inputLlmModel').value = p.model;
+      document.getElementById('sliderLlmTemp').value = p.temp;
+      document.getElementById('labelLlmTemp').textContent = p.temp;
+    }
+
+    function onLlmTempChange() {
+      const val = document.getElementById('sliderLlmTemp').value;
+      document.getElementById('labelLlmTemp').textContent = val;
+    }
+
+    async function fetchCurrentLlmSettings() {
+      try {
+        const res = await fetch('/finance/settings/llm');
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        // 更新顶部 Header 状态按钮
+        const dot = document.getElementById('llmStatusDot');
+        const text = document.getElementById('llmStatusText');
+        if (data.is_configured) {
+          dot.style.background = '#16a34a'; // 绿点
+          text.textContent = `LLM: ${data.model} (在线)`;
+        } else {
+          dot.style.background = '#eab308'; // 黄点
+          text.textContent = `LLM: 离线模拟器`;
+        }
+
+        // 回填弹窗表单
+        document.getElementById('inputLlmApiKey').value = data.api_key_raw || '';
+        document.getElementById('inputLlmBaseUrl').value = data.base_url || 'https://api.deepseek.com';
+        document.getElementById('inputLlmModel').value = data.model || 'deepseek-chat';
+        document.getElementById('sliderLlmTemp').value = data.temperature || 0.2;
+        document.getElementById('labelLlmTemp').textContent = data.temperature || 0.2;
+
+        const box = document.getElementById('llmTestResultBox');
+        if (data.is_configured) {
+          box.style.display = 'block';
+          box.style.background = '#f0fdf4';
+          box.style.border = '1px solid #86efac';
+          box.style.color = '#15803d';
+          box.innerHTML = `🟢 <strong>当前状态: 已连接云端大模型 (${data.model})</strong><br>Base URL: <code>${data.base_url}</code> | 密钥: <code>${data.api_key_masked}</code>`;
+        } else {
+          box.style.display = 'block';
+          box.style.background = '#fefce8';
+          box.style.border = '1px solid #fef08a';
+          box.style.color = '#854d0e';
+          box.innerHTML = `🟡 <strong>当前状态: 运行于本地离线金融模拟器</strong><br>尚未配置有效的云端 API Key。输入 Key 后点击【保存并生效】即可开启真模型推理。`;
+        }
+      } catch (err) {
+        console.warn('获取大模型设置失败:', err);
+      }
+    }
+
+    function openLlmConfigModal() {
+      const modal = document.getElementById('llmConfigModal');
+      modal.style.display = 'flex';
+      fetchCurrentLlmSettings();
+    }
+
+    function closeLlmConfigModal(e) {
+      document.getElementById('llmConfigModal').style.display = 'none';
+    }
+
+    async function testLlmConnection() {
+      const key = document.getElementById('inputLlmApiKey').value.trim();
+      const url = document.getElementById('inputLlmBaseUrl').value.trim();
+      const model = document.getElementById('inputLlmModel').value.trim();
+      const box = document.getElementById('llmTestResultBox');
+      const btn = document.getElementById('btnTestLlm');
+
+      if (!key) {
+        alert('请先输入要测试的 API Key！');
+        return;
+      }
+
+      box.style.display = 'block';
+      box.style.background = '#f6f5f1';
+      box.style.border = '1px solid #ded9cf';
+      box.style.color = '#6b6863';
+      box.innerHTML = `⏳ 正在向 <code>${url}</code> 发送连通性探测请求，请稍候...`;
+      btn.disabled = true;
+      btn.textContent = '⏳ 测试中...';
+
+      try {
+        const res = await fetch('/finance/settings/llm/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: key, base_url: url, model: model })
+        });
+        const result = await res.json();
+
+        if (!res.ok) {
+          const detailMsg = result.detail ? (typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail)) : `HTTP ${res.status} ${res.statusText}`;
+          box.style.background = '#fef2f2';
+          box.style.border = '1px solid #fca5a5';
+          box.style.color = '#b91c1c';
+          box.innerHTML = `❌ <strong>接口调用异常 (${res.status}):</strong> ${detailMsg}`;
+          return;
+        }
+
+        if (result.success) {
+          box.style.background = '#f0fdf4';
+          box.style.border = '1px solid #86efac';
+          box.style.color = '#15803d';
+          box.innerHTML = `✅ <strong>连通成功！</strong> (延迟 ${result.latency_ms}ms)<br>${result.message}`;
+        } else {
+          box.style.background = '#fef2f2';
+          box.style.border = '1px solid #fca5a5';
+          box.style.color = '#b91c1c';
+          const msg = result.message || result.detail || '大模型服务商返回异常，请检查 API Key 是否有效或欠费';
+          box.innerHTML = `❌ <strong>连通失败:</strong> ${msg}`;
+        }
+      } catch (err) {
+        box.style.background = '#fef2f2';
+        box.style.border = '1px solid #fca5a5';
+        box.style.color = '#b91c1c';
+        box.innerHTML = `❌ <strong>请求发生异常:</strong> ${err.message}`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🔌 测试连接';
+      }
+    }
+
+    async function saveLlmConfig() {
+      const key = document.getElementById('inputLlmApiKey').value.trim();
+      const url = document.getElementById('inputLlmBaseUrl').value.trim() || 'https://api.deepseek.com';
+      const model = document.getElementById('inputLlmModel').value.trim() || 'deepseek-chat';
+      const temp = parseFloat(document.getElementById('sliderLlmTemp').value) || 0.2;
+      const btn = document.getElementById('btnSaveLlm');
+
+      if (!key) {
+        alert('请输入大模型 API Key！');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = '⏳ 保存中...';
+
+      try {
+        const res = await fetch('/finance/settings/llm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: key, base_url: url, model: model, temperature: temp })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '保存失败');
+
+        alert(`🎉 大模型配置已成功保存并即时热更新生效！\n当前激活模型: ${data.model}\n服务接口: ${data.base_url}`);
+        closeLlmConfigModal();
+        fetchCurrentLlmSettings();
+      } catch (err) {
+        alert(`保存失败: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '💾 保存并生效';
+      }
+    }
+
+    // 页面加载时自动拉取模拟盘资产总览与大模型状态
+    window.addEventListener('DOMContentLoaded', () => {
+      loadPortfolioSummary(false);
+      fetchCurrentLlmSettings();
+    });
+  </script>
+</body>
+</html>

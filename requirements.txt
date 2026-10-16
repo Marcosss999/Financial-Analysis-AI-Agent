@@ -1,0 +1,10 @@
+# 基于 LLM 的金融分析多 Agent 投研协同系统依赖项清单
+fastapi>=0.110.0
+uvicorn>=0.28.0
+pydantic>=2.6.0
+langgraph>=0.2.0
+langchain-core>=0.2.0
+openai>=1.20.0
+numpy>=1.26.0
+httpx>=0.27.0
+requests>=2.31.0

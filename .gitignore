@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+.venv/
+venv/
+ENV/
+
+# Sensitive Environment Configurations
+.env
+
+# Data and Logs
+data/paper_portfolio.json
+*.log
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

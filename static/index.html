@@ -962,6 +962,13 @@
             <input type="range" id="sliderWeightFlow" min="0" max="100" value="10" step="5" class="weight-slider" oninput="onWeightSliderChange()">
           </div>
         </div>
+
+        <!-- 多空辩论开关：关闭后最终分数 = 各维度量化加权分，不做辩论调整 -->
+        <label style="display: flex; align-items: center; gap: 8px; margin-top: 12px; cursor: pointer; font-size: 13px;">
+          <input type="checkbox" id="toggleDebate" checked>
+          <span>⚔️ 启用投委会多空辩论</span>
+          <span style="color: var(--text-sub); font-size: 12px;">（关闭后跳过多空辩论，结论直接取各维度加权分）</span>
+        </label>
       </div>
     </section>
 
@@ -1451,6 +1458,7 @@
 
   <script>
     let currentStyle = 'balanced';
+    let currentRunDebateEnabled = true;  // 本次分析是否启用多空辩论（由开关在启动分析时决定）
 
     const PRESET_WEIGHTS = {
       balanced: { fund: 40, tech: 35, macro: 15, flow: 10 },
@@ -1547,6 +1555,16 @@
       resetUI();
       document.getElementById('tickerDisplay').textContent = ticker;
 
+      // 多空辩论开关
+      const enableDebate = document.getElementById('toggleDebate').checked;
+      currentRunDebateEnabled = enableDebate;
+      if (!enableDebate) {
+        const offText = '本次分析已关闭多空辩论：跳过多头、空头发言，最终结论直接取各维度量化加权分（无辩论调整）。';
+        document.getElementById('bullText').textContent = offText;
+        document.getElementById('bearText').textContent = offText;
+        document.getElementById('debateRoundBadge').textContent = '辩论已关闭';
+      }
+
       // 提取四个维度的自定义权重 (归一化交由后端自动计算)
       const fundWeight = parseFloat(document.getElementById('sliderWeightFund').value) / 100;
       const techWeight = parseFloat(document.getElementById('sliderWeightTech').value) / 100;
@@ -1573,7 +1591,7 @@
           body: JSON.stringify({ 
             ticker: ticker, 
             custom_query: customQuery, 
-            enable_debate: true,
+            enable_debate: enableDebate,
             strategy_style: currentStyle,
             fundamental_weight: fundWeight,
             technical_weight: techWeight,
@@ -1599,6 +1617,9 @@
               const rawJson = line.substring(6).trim();
               if (!rawJson) continue;
               const evt = JSON.parse(rawJson);
+              // 记忆库：记录服务端分配的 session_id，追问时带上即可延续会话记忆
+              if (evt.session_id) window.__sessionId = evt.session_id;
+              if (evt.data && evt.data.session_id) window.__sessionId = evt.data.session_id;
               handleStreamEvent(evt);
             }
           }
@@ -1645,7 +1666,7 @@
         if (evt.bear_argument) {
           document.getElementById('bearText').innerHTML = marked.parse(evt.bear_argument);
         }
-        if (evt.debate_round) {
+        if (evt.debate_round && currentRunDebateEnabled) {
           document.getElementById('debateRoundBadge').textContent = `Round ${evt.debate_round}`;
         }
         if (evt.verdict) {
@@ -1896,7 +1917,8 @@
             target_name: tName,
             question: question,
             report_context: reportContext,
-            history: chatHistory
+            history: chatHistory,
+            session_id: window.__sessionId || null
           })
         });
 
@@ -1917,6 +1939,7 @@
               if (raw === '[DONE]') break;
               try {
                 const parsed = JSON.parse(raw);
+                if (parsed.session_id) window.__sessionId = parsed.session_id;
                 if (parsed.text) {
                   fullReply += parsed.text;
                   msgContentEl.innerHTML = marked.parse(fullReply);

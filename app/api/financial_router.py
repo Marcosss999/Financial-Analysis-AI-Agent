@@ -8,13 +8,13 @@
 
 import asyncio
 import json
-import time
-from typing import AsyncGenerator
-from fastapi import APIRouter, HTTPException
+import uuid
+from typing import AsyncGenerator, Optional
+from fastapi import APIRouter, Header, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from app.core.config import settings
+from app.core.container import analysis_service, chat_memory, memory_store
 from app.core.llm_provider import llm_provider
-from app.graph.financial_graph import financial_graph
 from app.models.schemas import (
     AnalysisRequest,
     AnalysisResponse,
@@ -24,7 +24,8 @@ from app.models.schemas import (
     LLMConfigResp,
     StockChatRequest,
 )
-from app.tools.market_data import market_data_provider
+from app.services.analysis_service import AnalysisTimeoutError
+from app.tools.market_data import DataUnavailableError, market_data_provider
 
 router = APIRouter(prefix="/finance", tags=["Financial Analysis"])
 
@@ -39,221 +40,79 @@ async def get_stock_quote(ticker: str):
         raise HTTPException(status_code=500, detail=f"获取行情失败: {str(e)}")
 
 
+def _http_error(e: Exception) -> HTTPException:
+    if isinstance(e, DataUnavailableError):
+        return HTTPException(status_code=503, detail=str(e))
+    if isinstance(e, AnalysisTimeoutError):
+        return HTTPException(status_code=504, detail=str(e))
+    return HTTPException(status_code=500, detail=f"分析失败: {e}")
+
+
 @router.post("/analyze", response_model=AnalysisResponse)
-async def run_sync_analysis(request: AnalysisRequest):
-    """同步发起全流程多智能体投研分析"""
-    start_time = time.time()
-    ticker = request.ticker.strip().upper()
-
-    initial_state = {
-        "ticker": ticker,
-        "target_name": request.target_name,
-        "custom_query": request.custom_query,
-        "enable_debate": request.enable_debate,
-        "strategy_style": request.strategy_style,
-        "fundamental_weight": request.fundamental_weight,
-        "technical_weight": request.technical_weight,
-        "macro_weight": request.macro_weight,
-        "capital_flow_weight": request.capital_flow_weight,
-        "execution_logs": [],
-        "debate_turns": [],
-    }
-
+async def run_sync_analysis(
+    request: AnalysisRequest,
+    response: Response,
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+):
+    """
+    同步发起全流程多智能体投研分析。
+    携带 Idempotency-Key 请求头时，相同 key + 相同参数的重复提交只执行一次(网络重试/用户连点不会重复烧 LLM)，
+    命中缓存时响应头带 Idempotent-Replay: true。
+    """
     try:
-        final_state = await financial_graph.ainvoke(initial_state)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"多智能体工作流执行异常: {str(e)}")
-
-    elapsed = round(time.time() - start_time, 2)
-    arbiter = final_state.get("arbiter_verdict")
-    audit = final_state.get("risk_audit")
-    quote = final_state.get("quote")
-    macro = final_state.get("macro_output")
-    fund = final_state.get("fundamental_output")
-    tech = final_state.get("technical_output")
-    dcf = final_state.get("dcf_result")
-    var_res = final_state.get("var_result")
-
-    return AnalysisResponse(
-        ticker=ticker,
-        target_name=final_state.get("target_name", ticker),
-        current_price=quote.current_price if quote else 0.0,
-        consensus_score=arbiter.consensus_score if arbiter else 7.0,
-        verdict=arbiter.final_verdict if arbiter else "中性",
-        target_position=arbiter.target_position_pct if arbiter else "0%",
-        risk_status=audit.compliance_status if audit else "APPROVED",
-        is_vetoed=audit.is_risk_violated if audit else False,
-        macro_score=macro.score if macro else 7.0,
-        fundamental_score=fund.score if fund else 7.0,
-        technical_score=tech.score if tech else 7.0,
-        dcf_margin_of_safety=dcf.margin_of_safety_pct if dcf else 0.0,
-        var_95_drawdown=var_res.var_percentage if var_res else 0.0,
-        full_report_md=final_state.get("final_report_md", ""),
-        debate_history=final_state.get("debate_turns", []),
-        arbiter_verdict=arbiter,
-        audit_details=audit,
-        market_intel=final_state.get("market_intel"),
-        strategy_style=final_state.get("strategy_style", "balanced"),
-        weights_used={
-            "fundamental": final_state.get("fundamental_weight", 0.40),
-            "technical": final_state.get("technical_weight", 0.35),
-            "macro": final_state.get("macro_weight", 0.15),
-            "capital_flow": final_state.get("capital_flow_weight", 0.10),
-        },
-        execution_time_seconds=elapsed,
-    )
+        if idempotency_key:
+            data, replay = await analysis_service.run_idempotent(idempotency_key, request)
+            if replay:
+                response.headers["Idempotent-Replay"] = "true"
+        else:
+            data = await analysis_service.run(request)
+    except Exception as e:  # noqa: BLE001
+        raise _http_error(e)
+    return AnalysisResponse(**{k: v for k, v in data.items() if k in AnalysisResponse.model_fields})
 
 
 @router.post("/analyze/stream")
 async def run_stream_analysis(request: AnalysisRequest):
     """
-    真流式 Server-Sent Events (SSE) 端点
-    逐节点推送多智能体执行状态、辩论进展及最终研报
+    SSE 流式端点：按节点粒度推送执行进度、辩论进展与最终结构化结果。
+    事件：started(含 run_id / session_id) → node_update* → completed | error
     """
-    ticker = request.ticker.strip().upper()
-
     async def event_generator() -> AsyncGenerator[str, None]:
-        start_time = time.time()
-        initial_state = {
-            "ticker": ticker,
-            "target_name": request.target_name,
-            "custom_query": request.custom_query,
-            "enable_debate": request.enable_debate,
-            "strategy_style": request.strategy_style,
-            "fundamental_weight": request.fundamental_weight,
-            "technical_weight": request.technical_weight,
-            "macro_weight": request.macro_weight,
-            "capital_flow_weight": request.capital_flow_weight,
-            "execution_logs": [],
-            "debate_turns": [],
-        }
-
-        # 1. 广播任务启动事件
-        yield f"data: {json.dumps({'event': 'started', 'ticker': ticker, 'message': f'启动标的 {ticker} 投委会多Agent全流程分析...'}, ensure_ascii=False)}\n\n"
-
-        accumulated_state = dict(initial_state)
-
-        try:
-            # 2. 监听 LangGraph 状态图节点异步流
-            async for output_chunk in financial_graph.astream(initial_state):
-                for node_name, node_update in output_chunk.items():
-                    accumulated_state.update(node_update)
-
-                    # 提取日志或节点简要信息
-                    node_desc = {
-                        "init_data_node": "底数据加载与K线提取",
-                        "macro_node": "宏观经济与政策周期研判",
-                        "fundamental_node": "基本面三表穿透与杜邦/DCF计算",
-                        "technical_node": "量化技术形态与动量计算",
-                        "bull_node": "多头首席辩手陈词",
-                        "bear_node": "空头首席辩手反驳",
-                        "arbiter_node": "投委会多空分歧仲裁",
-                        "risk_node": "合规风控硬沙箱与一票否决审核",
-                        "reporter_node": "机构级投研研报排版归档",
-                    }.get(node_name, node_name)
-
-                    payload = {
-                        "event": "node_update",
-                        "node": node_name,
-                        "description": node_desc,
-                        "step": node_update.get("current_step", ""),
-                    }
-
-                    # 如果是辩论节点，附带最新分数与论辩内容
-                    if "bull_score" in node_update:
-                        payload["bull_score"] = node_update["bull_score"]
-                    if "bull_argument" in node_update:
-                        payload["bull_argument"] = node_update["bull_argument"]
-                    if "bear_score" in node_update:
-                        payload["bear_score"] = node_update["bear_score"]
-                    if "bear_argument" in node_update:
-                        payload["bear_argument"] = node_update["bear_argument"]
-                    if "current_debate_round" in node_update:
-                        payload["debate_round"] = node_update["current_debate_round"]
-                    if "arbiter_verdict" in node_update:
-                        payload["verdict"] = node_update["arbiter_verdict"].final_verdict
-                        payload["consensus_score"] = node_update["arbiter_verdict"].consensus_score
-
-                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                    await asyncio.sleep(0.04)
-
-            # 3. 广播全部完成事件与结构化结果契约
-            elapsed = round(time.time() - start_time, 2)
-            arbiter = accumulated_state.get("arbiter_verdict")
-            audit = accumulated_state.get("risk_audit")
-            quote = accumulated_state.get("quote")
-            macro = accumulated_state.get("macro_output")
-            fund = accumulated_state.get("fundamental_output")
-            tech = accumulated_state.get("technical_output")
-            dcf = accumulated_state.get("dcf_result")
-            var_res = accumulated_state.get("var_result")
-
-            final_response = AnalysisResponse(
-                ticker=ticker,
-                target_name=accumulated_state.get("target_name", ticker),
-                current_price=quote.current_price if quote else 0.0,
-                consensus_score=arbiter.consensus_score if arbiter else 7.0,
-                verdict=arbiter.final_verdict if arbiter else "中性",
-                target_position=arbiter.target_position_pct if arbiter else "0%",
-                risk_status=audit.compliance_status if audit else "APPROVED",
-                is_vetoed=audit.is_risk_violated if audit else False,
-                macro_score=macro.score if macro else 7.0,
-                fundamental_score=fund.score if fund else 7.0,
-                technical_score=tech.score if tech else 7.0,
-                dcf_margin_of_safety=dcf.margin_of_safety_pct if dcf else 0.0,
-                var_95_drawdown=var_res.var_percentage if var_res else 0.0,
-                full_report_md=accumulated_state.get("final_report_md", ""),
-                debate_history=accumulated_state.get("debate_turns", []),
-                arbiter_verdict=arbiter,
-                audit_details=audit,
-                market_intel=accumulated_state.get("market_intel"),
-                strategy_style=accumulated_state.get("strategy_style", "balanced"),
-                weights_used={
-                    "fundamental": accumulated_state.get("fundamental_weight", 0.40),
-                    "technical": accumulated_state.get("technical_weight", 0.35),
-                    "macro": accumulated_state.get("macro_weight", 0.15),
-                    "capital_flow": accumulated_state.get("capital_flow_weight", 0.10),
-                },
-                execution_time_seconds=elapsed,
-            )
-
-            data_dict = final_response.model_dump()
-            dupont = accumulated_state.get("dupont_result")
-            indicators = accumulated_state.get("quant_indicators")
-            if dupont:
-                data_dict["dupont_roe"] = dupont.calculated_roe
-                data_dict["net_margin"] = dupont.net_profit_margin
-            if dcf:
-                data_dict["dcf_value"] = dcf.intrinsic_value_per_share
-            if indicators:
-                data_dict["rsi_14"] = indicators.rsi_14
-                data_dict["macd_bar"] = indicators.macd_bar
-                data_dict["trend_signal"] = indicators.trend_signal
-                data_dict["support_level"] = indicators.support_level
-                data_dict["resistance_level"] = indicators.resistance_level
-            if var_res:
-                data_dict["var_absolute_loss"] = var_res.var_absolute_loss
-
-            complete_payload = {
-                "event": "completed",
-                "elapsed": elapsed,
-                "data": data_dict,
-            }
-            yield f"data: {json.dumps(complete_payload, ensure_ascii=False)}\n\n"
-
-        except Exception as e:
-            err_payload = {"event": "error", "message": f"流式处理失败: {str(e)}"}
-            yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n"
+        async for ev in analysis_service.stream(request):
+            yield f"data: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+
+
+# =============================================================================
+# 三(补)、 记忆库与可观测性查询
+# =============================================================================
+
+@router.get("/runs")
+async def list_runs(ticker: Optional[str] = None, limit: int = 20):
+    """历史分析记录列表(长期记忆)"""
+    return {"runs": await asyncio.to_thread(memory_store.list_runs, ticker.strip().upper() if ticker else None,
+                                            max(1, min(limit, 100)))}
+
+
+@router.get("/runs/{run_id}")
+async def get_run(run_id: str):
+    """某次分析的完整记录：结论、研报全文、数据质量，以及节点级 trace(耗时 / LLM 调用 / 降级)"""
+    run = await asyncio.to_thread(memory_store.get_run, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="run_id 不存在")
+    return run
+
+
+@router.get("/status")
+async def runtime_status():
+    """运行时状态：LLM 模式、熔断器状态、并行配置"""
+    return {"llm": llm_provider.status(), "parallel_experts": settings.eng.PARALLEL_EXPERTS,
+            "strict_real_data": settings.eng.STRICT_REAL_DATA}
 
 
 # =============================================================================
@@ -273,7 +132,7 @@ async def get_llm_settings():
     return LLMConfigResp(
         is_configured=llm_provider.is_configured,
         api_key_masked=masked_key,
-        api_key_raw=key,
+        api_key_raw="",  # 不再回传明文 Key (旧版本会把完整 Key 返回给任何能访问该接口的来源)
         base_url=settings.llm.BASE_URL,
         model=settings.llm.DEFAULT_MODEL,
         temperature=settings.llm.TEMPERATURE,
@@ -322,17 +181,18 @@ async def chat_with_advisor_stream(req: StockChatRequest):
     # 尝试快速获取标的最新即时盘面数据，增强投顾对当下走势的敏锐度
     quote_info = ""
     try:
-        q = market_data_provider.get_market_quote(ticker, days=5)
+        q = await asyncio.to_thread(market_data_provider.get_market_quote, ticker, 5)
         if q:
             target_name = q.name or target_name
             quote_info = (
                 f"【标的当前实时盘面数据参考】：\n"
                 f"- 最新现价: ¥{q.current_price:.2f} 元 (当日涨跌幅: {q.change_pct:+.2f}%)\n"
-                f"- 动态估值 PE(TTM): {q.pe_ttm:.1f}x | 市净率 PB: {q.pb:.2f}x\n"
-                f"- 当日换手率: {q.turnover_rate:.2f}% | 成交量: {q.volume/10000:.1f}万手\n\n"
+                f"- 动态估值 PE(TTM): {q.pe_ttm:.1f}x | 市净率 PB: {q.pb_ratio:.2f}x\n"
+                f"- 当日换手率: {q.turnover_rate:.2f}%\n\n"
             )
-    except Exception:
-        pass
+    except Exception as e:  # 行情只是增强上下文，失败不阻断对话，但要留日志(旧版本在这里把字段名错误静默吞掉了)
+        import logging
+        logging.getLogger(__name__).warning("chat quote enrich failed: %s", e)
 
     system_instruction = (
         f"你是一位拥有20年A股实操经验的华尔街兼公募基金资深投资顾问。用户正在针对标的【{target_name} ({ticker})】向你深度咨询。\n"
@@ -346,22 +206,20 @@ async def chat_with_advisor_stream(req: StockChatRequest):
         "3. 【严禁输出任何 JSON 或代码结构】：绝对严禁直接输出字典、JSON、代码块或内部变量！必须全程输出优美、清晰、排版专业的人类自然语言 Markdown。\n"
         "4. 【通俗犀利、专业客观】：语言既生动接地气，又兼具机构级深度，不盲目打鸡血，也不无脑唱空吓唬人。\n"
     )
-    if req.report_context:
-        trimmed_context = req.report_context[:2000]
-        system_instruction += f"\n【背景参考研报（注意：仅作为分析依据，请勿照抄以下内容）】：\n{trimmed_context}\n"
-
-    messages = [{"role": "system", "content": system_instruction}]
-    for h in req.history[-6:]:
-        messages.append({
-            "role": h.get("role", "user"),
-            "content": h.get("content", "")
-        })
-    messages.append({"role": "user", "content": req.question.strip()})
+    session_id = req.session_id or uuid.uuid4().hex[:12]
+    await chat_memory.import_history(session_id, ticker, req.history)  # 兼容旧前端自带的 history
+    messages = await chat_memory.build_context(
+        session_id, ticker, system_instruction, req.question.strip(), req.report_context
+    )
 
     async def event_generator() -> AsyncGenerator[str, None]:
+        answer_parts = []
         try:
+            yield f"data: {json.dumps({'session_id': session_id}, ensure_ascii=False)}\n\n"
             async for chunk in llm_provider.chat_stream(messages):
+                answer_parts.append(chunk)
                 yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+            await chat_memory.remember(session_id, ticker, req.question.strip(), "".join(answer_parts))
             yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
@@ -385,36 +243,33 @@ async def chat_with_advisor_sync(req: StockChatRequest):
 
     quote_info = ""
     try:
-        q = market_data_provider.get_market_quote(ticker, days=5)
+        q = await asyncio.to_thread(market_data_provider.get_market_quote, ticker, 5)
         if q:
             target_name = q.name or target_name
             quote_info = (
                 f"【标的实时盘面数据】：现价 ¥{q.current_price:.2f} 元 (涨跌幅: {q.change_pct:+.2f}%), "
                 f"PE(TTM): {q.pe_ttm:.1f}x, 换手率: {q.turnover_rate:.2f}%\n"
             )
-    except Exception:
-        pass
+    except Exception as e:  # 行情只是增强上下文，失败不阻断对话，但要留日志(旧版本在这里把字段名错误静默吞掉了)
+        import logging
+        logging.getLogger(__name__).warning("chat quote enrich failed: %s", e)
 
     system_instruction = (
         f"你是一位拥有20年A股实操经验的华尔街兼公募基金资深投资顾问。用户正在针对标的【{target_name} ({ticker})】向你深度咨询。\n"
         f"{quote_info}"
         "【投顾核心原则】：禁止机械复述多空辩论原话套话；第一优先级正面解答用户具体问题（如暴跌归因、龙虎榜博弈、买卖点）；严禁输出内部 JSON；全程使用专业通俗的 Markdown 自然语言。\n"
     )
-    if req.report_context:
-        trimmed_context = req.report_context[:2000]
-        system_instruction += f"\n【参考背景研报（切勿照抄）】：\n{trimmed_context}\n"
-
-    messages = [{"role": "system", "content": system_instruction}]
-    for h in req.history[-6:]:
-        messages.append({
-            "role": h.get("role", "user"),
-            "content": h.get("content", "")
-        })
-    messages.append({"role": "user", "content": req.question.strip()})
+    session_id = req.session_id or uuid.uuid4().hex[:12]
+    await chat_memory.import_history(session_id, ticker, req.history)  # 兼容旧前端自带的 history
+    messages = await chat_memory.build_context(
+        session_id, ticker, system_instruction, req.question.strip(), req.report_context
+    )
 
     reply = await llm_provider.chat(messages)
+    await chat_memory.remember(session_id, ticker, req.question.strip(), reply)
     return {
         "status": "success",
+        "session_id": session_id,
         "ticker": ticker,
         "target_name": target_name,
         "question": req.question,

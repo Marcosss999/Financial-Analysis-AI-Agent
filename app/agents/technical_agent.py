@@ -9,6 +9,7 @@
 from datetime import datetime
 from typing import Dict, Any, List
 from app.agents.base_agent import BaseSpecialistAgent
+from app.tools.scoring import score_technical
 from app.models.agent_state import FinancialAgentState
 from app.models.schemas import SpecialistAgentOutput
 from app.tools.market_data import market_data_provider
@@ -64,6 +65,10 @@ class TechnicalAgent(BaseSpecialistAgent):
             f"- MACD(12,26,9): DIF={indicators_res.macd_dif}, DEA={indicators_res.macd_dea}, 柱状图={indicators_res.macd_bar}\n"
             f"- RSI(14): {indicators_res.rsi_14}\n"
             f"- 布林带(20, 2σ): 上轨={indicators_res.boll_upper}, 中轨={indicators_res.boll_middle}, 下轨={indicators_res.boll_lower}\n"
+            f"- 趋势/动量: MA20={indicators_res.ma20}, MA60={indicators_res.ma60}, 近5日涨跌={indicators_res.ret_5d}%, 近20日涨跌={indicators_res.ret_20d}%\n"
+            f"- 波动率: ATR(14)={indicators_res.atr_14} ({indicators_res.atr_pct}% 现价), 20日年化实现波动率={indicators_res.realized_vol_20}%, 5日/20日波动比={indicators_res.vol_regime}\n"
+            f"- 量能: 量比(当日/前5日均量)={indicators_res.volume_ratio}, OBV 斜率={indicators_res.obv_slope}, MFI(14)={indicators_res.mfi_14}\n"
+            f"- 布林 %B={indicators_res.boll_pctb}, 带宽={indicators_res.boll_bandwidth}\n"
             f"- 核心支撑位: {indicators_res.support_level} 元 | 核心阻力位: {indicators_res.resistance_level} 元\n"
             f"- 算法综合信号: {indicators_res.trend_signal}\n"
             "请出具专业的技术形态研判与入场择时策略。"
@@ -74,34 +79,26 @@ class TechnicalAgent(BaseSpecialistAgent):
             {"role": "user", "content": user_content},
         ]
 
-        raw_reply = await self._call_llm(messages, json_mode=True)
+        raw_reply, live = await self._call_llm_ex(messages, json_mode=True)
 
-        default_fallback = {
-            "stance": "多头蓄势 (Bullish Accumulation)" if indicators_res.rsi_14 >= 40 else "震荡筑底 (Base Building)",
-            "score": 7.8 if indicators_res.macd_bar >= 0 else 6.5,
-            "summary": f"{target_name} 量化算法信号为 [{indicators_res.trend_signal}]，RSI 为 {indicators_res.rsi_14}，核心支撑位于 {indicators_res.support_level} 元，下行具备坚实托底。",
+        quant_score, comps = score_technical(indicators_res)
+        fallback = {
+            "summary": (
+                f"{target_name} 技术面量化评分 {quant_score}/10：算法信号[{indicators_res.trend_signal}]，"
+                f"RSI {indicators_res.rsi_14}，MACD 柱 {indicators_res.macd_bar}，近5日 {indicators_res.ret_5d}%，"
+                f"20日实现波动率 {indicators_res.realized_vol_20}%（5/20日比 {indicators_res.vol_regime}），"
+                f"量比 {indicators_res.volume_ratio}，MFI {indicators_res.mfi_14}。（本段为数据模板生成，非大模型推理）"
+            ),
             "details": {
-                "trend_evaluation": f"最新价处于布林带中轨附近，算法判定为 {indicators_res.trend_signal}",
-                "momentum_analysis": f"MACD DIF 为 {indicators_res.macd_dif}，动能柱显示走势趋向收敛平稳",
-                "volatility_channel": f"布林带区间在 [{indicators_res.boll_lower}, {indicators_res.boll_upper}] 元之间波动",
-                "support_resistance_tactic": f"建议以 {indicators_res.support_level} 元作为底仓保护止损基准，目标阻力上看 {indicators_res.resistance_level} 元",
+                "trend_evaluation": f"现价 {indicators_res.last_close} vs MA20 {indicators_res.ma20} / MA60 {indicators_res.ma60}",
+                "momentum_analysis": f"DIF {indicators_res.macd_dif} / DEA {indicators_res.macd_dea}，RSI {indicators_res.rsi_14}",
+                "volatility_channel": f"布林区间 [{indicators_res.boll_lower}, {indicators_res.boll_upper}]，%B {indicators_res.boll_pctb}；ATR {indicators_res.atr_14}",
+                "support_resistance_tactic": f"支撑 {indicators_res.support_level} 元，阻力 {indicators_res.resistance_level} 元",
             },
-            "key_points": [
-                f"关键防守支撑位锁定在 {indicators_res.support_level} 元",
-                f"RSI 处于 {indicators_res.rsi_14} 水平，无明显顶部背离风险",
-                f"建议逢低在布林中轨与下轨支撑区间分批介入",
-            ],
+            "key_points": [f"分项得分(相对中性5分的加减)：{comps}"],
         }
-
-        parsed_data = self._parse_json_safely(raw_reply, default_fallback)
-
-        technical_output = SpecialistAgentOutput(
-            agent_name=self.name,
-            stance=parsed_data.get("stance", "多头蓄势"),
-            score=float(parsed_data.get("score", 7.5)),
-            summary=parsed_data.get("summary", ""),
-            details=parsed_data.get("details", {}),
-            key_points=parsed_data.get("key_points", []),
+        technical_output = self.build_output(
+            quant_score=quant_score, components=comps, raw_reply=raw_reply, live=live, fallback=fallback,
         )
 
         log_item = {

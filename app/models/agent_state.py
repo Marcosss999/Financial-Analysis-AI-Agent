@@ -58,6 +58,12 @@ class FinancialAgentState(TypedDict, total=False):
     fundamental_output: Optional[SpecialistAgentOutput] # 基本面分析师结论
     technical_output: Optional[SpecialistAgentOutput]   # 量化技术面分析师结论
 
+    # 3.5 确定性加权评分（权重 × 各维度量化评分，与 LLM 是否在线无关）
+    dimension_scores: Optional[Dict[str, Optional[float]]]  # 四维量化评分，None 表示该维度无数据
+    effective_weights: Optional[Dict[str, float]]           # 剔除缺失维度并重新归一后的实际权重
+    base_score: Optional[float]                             # 权重加权后的基础分(辩论调整前)
+    score_breakdown: Optional[List[Dict[str, Any]]]         # 各维度对基础分的贡献明细
+
     # 4. 多空辩论博弈状态 (Debate Engine)
     bull_argument: Optional[str]            # 多头最新论点
     bull_score: float                       # 多头置信分
@@ -79,4 +85,7 @@ class FinancialAgentState(TypedDict, total=False):
     final_report_md: Optional[str]          # 终版结构化研报 Markdown
     current_step: str                       # 当前执行节点标识
     execution_logs: Annotated[List[Dict[str, Any]], operator.add] # 链路执行日志追踪
+    run_id: str                             # 本次分析 ID (与 trace 对应)
+    history_runs: Optional[List[Dict[str, Any]]]  # 长期记忆：该标的最近几次分析的摘要
+    degraded_nodes: Annotated[List[str], operator.add]  # 降级运行的节点名 (并行节点可同时追加)
     error: Optional[str]                    # 异常错误记录

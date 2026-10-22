@@ -44,7 +44,13 @@ class RiskGuardrailAgent(BaseSpecialistAgent):
         # 规则 (1): 资产负债率检查 (标准实体企业红线 75%；商业银行等持牌金融机构因吸收存款记为负债，红线适应性设为 94%)
         debt_ratio = financials.debt_to_asset_ratio
         is_financial_institution = any(k in target_name for k in ["银行", "证券", "保险", "信托"])
-        max_debt = 94.0 if is_financial_institution else (settings.risk.MAX_DEBT_TO_ASSET_RATIO * 100.0)
+        max_debt = (
+            settings.risk.FINANCIAL_INSTITUTION_MAX_DEBT_PCT
+            if is_financial_institution
+            else settings.risk.MAX_DEBT_TO_ASSET_RATIO * 100.0
+        )
+        skipped: List[str] = []
+        est = set(getattr(financials, "estimated_fields", []) or [])
         
         if debt_ratio > max_debt:
             inst_note = " (金融持牌机构特例口径)" if is_financial_institution else ""
@@ -55,7 +61,12 @@ class RiskGuardrailAgent(BaseSpecialistAgent):
             checklist["debt_to_asset"] = f"通过 (当前 {debt_ratio}% <= 红线 {max_debt}%)"
 
         # 规则 (2): 利息保障倍数检查 (非金融企业底线 1.5x；持牌金融机构计息负债利息支出为经营成本，免受工业标准限制)
-        if not is_financial_institution:
+        if not is_financial_institution and ({"ebit", "interest_expense"} & est):
+            # EBIT 与利息费用在数据源里是按净利润/负债乘经验系数推算的，不是财报披露值，
+            # 拿估算值去做“一票否决”会产生虚假的硬拦截，所以只记录、不判定
+            checklist["interest_coverage"] = "未检查 (EBIT/利息费用为估算值，非财报披露，不作为否决依据)"
+            skipped.append("interest_coverage")
+        elif not is_financial_institution:
             interest = max(0.1, financials.interest_expense)
             interest_coverage = financials.ebit / interest
             min_coverage = settings.risk.MIN_INTEREST_COVERAGE
@@ -77,14 +88,19 @@ class RiskGuardrailAgent(BaseSpecialistAgent):
         else:
             checklist["var_95_drawdown"] = f"通过 (单周预期在险损失 {var_res.var_percentage}% <= 红线 {max_var}%)"
 
-        # 规则 (4): 重大监管舆情合规检查
-        checklist["regulatory_scrutiny"] = "通过 (标的无重大立案调查或暂停上市退市风险)"
+        # 规则 (4): 重大监管舆情合规检查 —— 目前没有接入监管数据源，如实标记为未检查，而不是写“通过”
+        checklist["regulatory_scrutiny"] = "未检查 (尚未接入监管立案/退市风险数据源)"
+        skipped.append("regulatory_scrutiny")
+
+        # 数据质量声明：模拟数据上的风控结论只能用于演示
+        if getattr(financials, "data_source", "real") != "real" or getattr(quote, "data_source", "real") == "simulated":
+            checklist["data_quality"] = "警告：本次风控基于离线模拟数据，结论仅供演示，不可作为投资依据"
 
         # 3. 裁定风控状态与评级
         if is_violated and settings.risk.ENABLE_HARD_GUARDRAILS:
             compliance_status = "VETOED"
             risk_level = "R5-极高风险 (Hard Constraint Vetoed)"
-        elif debt_ratio > 65.0 or var_res.var_percentage > 12.0:
+        elif debt_ratio > settings.risk.WARN_DEBT_PCT or var_res.var_percentage > settings.risk.WARN_VAR_PCT:
             compliance_status = "WARNING"
             risk_level = "R3-中度平衡风险 (Warning Cleared)"
         else:
@@ -97,6 +113,7 @@ class RiskGuardrailAgent(BaseSpecialistAgent):
             risk_level=risk_level,
             audit_checklist=checklist,
             veto_reasons=veto_reasons,
+            skipped_checks=skipped,
         )
 
         # 4. 若触发一票否决，强制篡改下刷投委会终审结果，保卫客户资本
@@ -110,10 +127,14 @@ class RiskGuardrailAgent(BaseSpecialistAgent):
         if is_violated and settings.risk.ENABLE_HARD_GUARDRAILS:
             arbiter = state.get("arbiter_verdict")
             if arbiter:
-                arbiter.final_verdict = "【一票否决】合规风控硬性驳回 (Vetoed)"
-                arbiter.target_position_pct = "0% (禁止建仓，执行熔断)"
-                arbiter.arbitration_summary = f"因触发合规风控硬红线（{'; '.join(veto_reasons)}），风控委员会依据底线原则实施一票否决！"
-                updates["arbiter_verdict"] = arbiter
+                # 不原地修改上游对象：用 model_copy 生成新对象，并保留否决前的原始裁决供审计追溯
+                updates["arbiter_verdict"] = arbiter.model_copy(update={
+                    "pre_veto_verdict": arbiter.final_verdict,
+                    "pre_veto_position": arbiter.target_position_pct,
+                    "final_verdict": "【一票否决】合规风控硬性驳回 (Vetoed)",
+                    "target_position_pct": "0% (禁止建仓，执行熔断)",
+                    "arbitration_summary": f"因触发合规风控硬红线（{'; '.join(veto_reasons)}），风控委员会依据底线原则实施一票否决！",
+                })
 
         log_item = {
             "node": "risk_guardrail",

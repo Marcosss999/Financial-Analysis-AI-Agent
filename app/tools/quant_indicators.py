@@ -12,6 +12,69 @@ from app.core.config import settings
 from app.models.schemas import KLineBar, QuantIndicatorsResult
 
 
+def _mean(xs):
+    return sum(xs) / len(xs) if xs else 0.0
+
+
+def _std(xs):
+    """样本标准差 (ddof=1)"""
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    m = _mean(xs)
+    return math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+
+
+def compute_atr(highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> float:
+    """Wilder 平滑 ATR：TR = max(H-L, |H-前收|, |L-前收|)；首个 ATR 取前 period 根 TR 均值，之后递推平滑"""
+    if len(closes) < 2:
+        return 0.0
+    trs = [max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+           for i in range(1, len(closes))]
+    if len(trs) <= period:
+        return _mean(trs)
+    atr = _mean(trs[:period])
+    for tr in trs[period:]:
+        atr = (atr * (period - 1) + tr) / period
+    return atr
+
+
+def compute_realized_vol(closes: List[float], window: int) -> float:
+    """近 window 个交易日对数收益率的年化波动率 (%)"""
+    rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes)) if closes[i - 1] > 0 and closes[i] > 0]
+    rets = rets[-window:]
+    return _std(rets) * math.sqrt(252.0) * 100.0
+
+
+def compute_obv_slope(closes: List[float], volumes: List[float], lookback: int = 10) -> float:
+    """OBV 近 lookback 日的归一化斜率 = OBV 变化量 / 同期总成交量，取值 [-1, 1]"""
+    if len(closes) < lookback + 1:
+        return 0.0
+    obv = [0.0]
+    for i in range(1, len(closes)):
+        step = volumes[i] if closes[i] > closes[i - 1] else (-volumes[i] if closes[i] < closes[i - 1] else 0.0)
+        obv.append(obv[-1] + step)
+    total = sum(volumes[-lookback:])
+    return (obv[-1] - obv[-lookback - 1]) / total if total > 0 else 0.0
+
+
+def compute_mfi(highs, lows, closes, volumes, period: int = 14) -> float:
+    """资金流量指标 MFI：以典型价 x 成交量为资金流，是带成交量的 RSI"""
+    if len(closes) < 2:
+        return 50.0
+    tp = [(h + l + c) / 3.0 for h, l, c in zip(highs, lows, closes)]
+    pos = neg = 0.0
+    for i in range(max(1, len(tp) - period), len(tp)):
+        flow = tp[i] * volumes[i]
+        if tp[i] > tp[i - 1]:
+            pos += flow
+        elif tp[i] < tp[i - 1]:
+            neg += flow
+    if neg == 0:
+        return 100.0 if pos > 0 else 50.0
+    return 100.0 - 100.0 / (1.0 + pos / neg)
+
+
 class QuantIndicatorsEngine:
     """确定性量化技术指标计算器"""
 
@@ -143,7 +206,34 @@ class QuantIndicatorsEngine:
         else:
             trend_signal = "震荡整理-等待方向选择 (Neutral Consolidation)"
 
+        # ---------------------------------------------------------------------
+        # 6. 短线扩展指标：波动率 / 量能 / 短期反转 (日 K 即可计算)
+        # ---------------------------------------------------------------------
+        volumes = [bar.volume for bar in klines]
+        atr = compute_atr(highs, lows, closes, 14)
+        rv20 = compute_realized_vol(closes, 20)
+        rv5 = compute_realized_vol(closes, 5)
+        prev5 = volumes[-6:-1] if len(volumes) >= 6 else volumes[:-1]
+        avg_prev5 = _mean(prev5)
+        n = len(closes)
+        band = boll_upper - boll_lower
+
         return QuantIndicatorsResult(
+            last_close=round(latest_close, 4),
+            ma20=round(_mean(closes[-20:]), 4),
+            ma60=round(_mean(closes[-60:]), 4),
+            atr_14=round(atr, 4),
+            atr_pct=round(atr / latest_close * 100.0, 3) if latest_close > 0 else 0.0,
+            realized_vol_20=round(rv20, 2),
+            realized_vol_5=round(rv5, 2),
+            vol_regime=round(rv5 / rv20, 3) if rv20 > 0 else 1.0,
+            volume_ratio=round(volumes[-1] / avg_prev5, 3) if avg_prev5 > 0 else 1.0,
+            obv_slope=round(compute_obv_slope(closes, volumes, 10), 4),
+            mfi_14=round(compute_mfi(highs, lows, closes, volumes, 14), 2),
+            ret_5d=round((closes[-1] / closes[-6] - 1.0) * 100.0, 3) if n >= 6 and closes[-6] > 0 else 0.0,
+            ret_20d=round((closes[-1] / closes[-21] - 1.0) * 100.0, 3) if n >= 21 and closes[-21] > 0 else 0.0,
+            boll_pctb=round((latest_close - boll_lower) / band, 4) if band > 0 else 0.5,
+            boll_bandwidth=round(band / boll_middle, 4) if boll_middle > 0 else 0.0,
             macd_dif=round(latest_dif, 3),
             macd_dea=round(latest_dea, 3),
             macd_bar=round(latest_macd_bar, 3),

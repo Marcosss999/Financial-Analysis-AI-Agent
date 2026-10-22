@@ -53,8 +53,10 @@ class RiskCalculatorEngine:
             daily_sigma = 0.020
 
         # 2. 向量化几何布朗运动模拟 (GBM: S_t = S_0 * exp((mu - 0.5*sigma^2)*t + sigma*sqrt(t)*Z))
-        np.random.seed(42)  # 固定随机种子确保同批次复现确定性
-        z = np.random.normal(0.0, 1.0, n_sims)
+        # 使用局部 Generator 而不是 np.random.seed(全局状态)：既可复现，又不污染进程内其他随机逻辑，
+        # 并发多个分析请求时也互不影响
+        rng = np.random.default_rng(settings.quant.VAR_SEED)
+        z = rng.normal(0.0, 1.0, n_sims)
         drift = (daily_mu - 0.5 * (daily_sigma ** 2)) * days
         diffusion = daily_sigma * np.sqrt(days) * z
 

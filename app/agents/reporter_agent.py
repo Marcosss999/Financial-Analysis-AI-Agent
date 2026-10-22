@@ -66,6 +66,12 @@ class ReporterAgent(BaseSpecialistAgent):
         }
         style_name = style_names.get(style, "机构均衡配置模式")
 
+        bd = (arbiter.score_breakdown if arbiter else []) or []
+        breakdown_md = "| 维度 | 量化评分 | 用户权重 | 实际权重 | 贡献 |\n| :--- | :--- | :--- | :--- | :--- |\n" + "\n".join(
+            f"| {b['label']} | {b['score'] if b['score'] is not None else '无数据'} | {b['user_weight']:.0%} | "
+            f"{b['effective_weight']:.0%} | {b['contribution']} |" for b in bd
+        ) if bd else "（无贡献表）"
+
         # 组装高规格投研研报 Markdown
         report_md = f"""# 【投研智囊】标的资产深度投资价值分析研报：{target_name} ({ticker})
 
@@ -86,7 +92,17 @@ class ReporterAgent(BaseSpecialistAgent):
 | **杜邦 ROE 质量** | **{dupont.calculated_roe if dupont else '--'}%** (净利率: {dupont.net_profit_margin if dupont else '--'}%) | {dupont.quality_verdict if dupont else '--'} |
 | **DCF 内在公允价值** | **{dcf.intrinsic_value_per_share if dcf else '--'} 元** (安全边际: {dcf.margin_of_safety_pct if dcf else '--'}%) | {dcf.valuation_status if dcf else '--'} |
 | **量化技术形态** | RSI(14): **{indicators.rsi_14 if indicators else '--'}**，MACD柱: **{indicators.macd_bar if indicators else '--'}** | {indicators.trend_signal if indicators else '--'} |
+| **波动率 / ATR** | ATR(14): **{indicators.atr_14 if indicators else '--'}** ({indicators.atr_pct if indicators else '--'}%)，20日实现波动率: **{indicators.realized_vol_20 if indicators else '--'}%** | 5/20日波动比 {indicators.vol_regime if indicators else '--'} |
+| **量能** | 量比: **{indicators.volume_ratio if indicators else '--'}**，MFI(14): **{indicators.mfi_14 if indicators else '--'}**，OBV斜率: {indicators.obv_slope if indicators else '--'} | 近5日 {indicators.ret_5d if indicators else '--'}% / 近20日 {indicators.ret_20d if indicators else '--'}% |
 | **95% 蒙特卡洛 VaR** | 单周最大在险损失率: **{var_res.var_percentage if var_res else '--'}%** | 对应预期单股损失: {var_res.var_absolute_loss if var_res else '--'} 元 |
+
+---
+
+## 决策贡献表（用户权重 × 各维度量化评分）
+
+{breakdown_md}
+
+> 基础分 **{arbiter.base_score if arbiter else '--'}**，多空辩论有界调整 **{(f"{arbiter.debate_adjustment:+.2f}") if arbiter else '--'}**，最终得分 **{consensus_score}**。结论档位、仓位与止损均由确定性规则得出，与 LLM 是否在线无关；LLM 仅负责文字解读。
 
 ---
 

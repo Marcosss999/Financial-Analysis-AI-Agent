@@ -10,13 +10,19 @@
 import hashlib
 import logging
 import math
+import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 import requests
 
+from app.core.config import settings
 from app.models.schemas import MarketQuote, KLineBar, FinancialStatements
 
 logger = logging.getLogger(__name__)
+
+
+class DataUnavailableError(RuntimeError):
+    """STRICT_REAL_DATA 模式下，真实数据源不可用时抛出，而不是静默降级为模拟数据"""
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -93,8 +99,12 @@ class LiveMarketDataProvider:
 
                         # 2. 尝试抽取真实历史日 K 线
                         kline_history = cls._fetch_real_klines(full_symbol, days=days)
+                        source = "real"
                         if not kline_history:
-                            kline_history = cls._generate_synthetic_klines(real_price, days=days)
+                            if settings.eng.STRICT_REAL_DATA:
+                                raise DataUnavailableError(f"{ticker} K 线不可用 (STRICT_REAL_DATA=true)")
+                            kline_history = cls._generate_synthetic_klines(real_price, days=days, seed=code)
+                            source = "partial_simulated_klines"
 
                         return MarketQuote(
                             ticker=code,
@@ -106,12 +116,27 @@ class LiveMarketDataProvider:
                             market_cap=round(market_cap, 1),
                             turnover_rate=round(turnover_rate, 2),
                             kline_history=kline_history,
+                            data_source=source,
                         )
+        except DataUnavailableError:
+            raise
         except Exception as e:
             logger.warning(f"[MarketData] 真实行情抽取失败 ({e})，启用弹性保真模拟器。")
 
-        # 3. 失败兜底：使用确定性合成引擎
+        # 3. 失败兜底：使用确定性合成引擎 (严格模式下直接报错)
+        if settings.eng.STRICT_REAL_DATA:
+            raise DataUnavailableError(f"{ticker} 行情数据源不可用 (STRICT_REAL_DATA=true，拒绝使用模拟数据)")
         return cls._get_synthetic_market_quote(code, days=days)
+
+    @classmethod
+    def get_index_bars(cls, days: int = 60, symbol: str = "sh000300") -> Tuple[List[KLineBar], str]:
+        """宽基指数(默认沪深300)日 K，用于“宏观/市场环境”评分。返回 (bars, source)；source: real / simulated / unavailable"""
+        bars = cls._fetch_real_klines(symbol, days=days)
+        if bars:
+            return bars, "real"
+        if settings.eng.STRICT_REAL_DATA:
+            return [], "unavailable"
+        return cls._generate_synthetic_klines(4000.0, days=days, seed=f"INDEX-{symbol}"), "simulated"
 
     @classmethod
     def _fetch_real_klines(cls, full_symbol: str, days: int = 60) -> List[KLineBar]:
@@ -205,11 +230,17 @@ class LiveMarketDataProvider:
                             interest_expense=round(max(0.5, total_liab * 0.035), 1),
                             ebit=round(net_val * 1.35, 1),
                             roe=round(roe_val, 1) if roe_val else 15.0,
+                            data_source="real",
+                            # 以下字段接口未直接提供，按经验系数由营收/净利润推算，风控不得据此一票否决
+                            estimated_fields=["total_assets", "total_liabilities", "operating_cash_flow",
+                                              "interest_expense", "ebit"],
                         )
             except Exception as e:
                 logger.warning(f"[MarketData] 真实财报抽取失败 ({e})，启用保真模拟数据。")
 
         # 美股或兜底回退生成
+        if settings.eng.STRICT_REAL_DATA:
+            raise DataUnavailableError(f"{ticker} 财报数据源不可用 (STRICT_REAL_DATA=true，拒绝使用模拟数据)")
         return cls._get_synthetic_financials(code)
 
     # =========================================================================
@@ -217,27 +248,35 @@ class LiveMarketDataProvider:
     # =========================================================================
 
     @classmethod
-    def _generate_synthetic_klines(cls, current_price: float, days: int = 60) -> List[KLineBar]:
+    def _generate_synthetic_klines(cls, current_price: float, days: int = 60, seed: Any = 0) -> List[KLineBar]:
+        """
+        离线模拟 K 线：以标的代码为种子的随机游走(几何布朗运动式)，从“今天的现价”倒推历史。
+        每个标的有不同的波动率，保证离线演示时各标的的技术指标和 VaR 有区分度；仅供演示。
+        """
+        seed_int = int(hashlib.md5(str(seed).encode("utf-8")).hexdigest()[:8], 16)
+        rng = np.random.default_rng(seed_int)
+        daily_sigma = 0.010 + (seed_int % 25) / 1000.0  # 1.0% ~ 3.4% 日波动
+        rets = rng.normal(0.0003, daily_sigma, days)
         bars: List[KLineBar] = []
         today = datetime.now()
-        price = current_price
+        close = current_price
         for i in range(days, 0, -1):
-            date_str = (today - timedelta(days=int(i * 1.45))).strftime("%Y-%m-%d")
-            cycle = math.sin(i / 5.0) * 0.015
-            open_p = price / (1.0 + 0.001 + cycle)
-            high_p = max(open_p, price) * (1.0 + 0.008)
-            low_p = min(open_p, price) * (1.0 - 0.008)
-            vol = 15000.0 * (1.0 + abs(cycle) * 5.0)
+            r = float(rets[days - i])
+            open_p = close / (1.0 + r)
+            span = abs(r) + daily_sigma * 0.5
+            high_p = max(open_p, close) * (1.0 + span * 0.5)
+            low_p = min(open_p, close) * (1.0 - span * 0.5)
+            vol = 15000.0 * (1.0 + abs(r) * 20.0)
             bars.append(KLineBar(
-                date=date_str,
+                date=(today - timedelta(days=int(i * 1.45))).strftime("%Y-%m-%d"),
                 open=round(open_p, 2),
                 high=round(high_p, 2),
                 low=round(low_p, 2),
-                close=round(price, 2),
+                close=round(close, 2),
                 volume=round(vol, 0),
-                turnover=round(vol * price, 2),
+                turnover=round(vol * close, 2),
             ))
-            price = open_p
+            close = open_p
         bars.sort(key=lambda x: x.date)
         return bars
 
@@ -254,7 +293,8 @@ class LiveMarketDataProvider:
             pb_ratio=round(1.2 + (h_val % 80) / 10.0, 1),
             market_cap=round(base_price * 15.0, 1),
             turnover_rate=round(0.5 + (h_val % 40) / 10.0, 2),
-            kline_history=cls._generate_synthetic_klines(base_price, days=days),
+            kline_history=cls._generate_synthetic_klines(base_price, days=days, seed=code),
+            data_source="simulated",
         )
 
     @classmethod
@@ -281,6 +321,8 @@ class LiveMarketDataProvider:
             interest_expense=round(max(0.5, liabilities * 0.035), 1),
             ebit=round(net_profit * 1.3, 1),
             roe=round((net_profit / max(1.0, assets - liabilities)) * 100.0, 1),
+            data_source="simulated",
+            estimated_fields=["total_assets", "total_liabilities", "operating_cash_flow", "interest_expense", "ebit"],
         )
 
 

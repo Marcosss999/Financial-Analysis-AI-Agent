@@ -39,30 +39,87 @@
    - 集成大模型网关可视化配置弹窗（可在线切换 DeepSeek / Qwen 等 OpenAI 协议模型并进行实时联通测试）。
    - 全流程 Server-Sent Events (SSE) 实时打字机流式事件推送。
 
+
+---
+
+## 🧱 v2：记忆库与工程化稳定性
+
+| 模块 | 做了什么 | 代码位置 |
+|---|---|---|
+| **专家并行** | 宏观 / 基本面 / 技术面三位专家 fan-out 并发，汇合节点 fan-in 后再进入辩论；`PARALLEL_EXPERTS=false` 可回退串行 | `app/graph/financial_graph.py` |
+| **长期记忆** | 每次分析落 SQLite（结论、评分、风控、数据质量、研报、trace）；再次分析同一标的自动召回最近 3 次，研报末尾输出“与上次结论对比” | `app/memory/store.py` |
+| **会话记忆 + 上下文压缩** | 追问对话按 `session_id` 存服务端；最近 6 轮保留原文，更早的滚动压缩为摘要（LLM 摘要，不可用时退化为抽取式），再按字符预算兜底裁剪；研报背景直接取记忆库里的最近结论 | `app/memory/chat_memory.py` |
+| **重试 / 超时 / 熔断** | LLM 调用：单次超时 + 指数退避重试（带抖动）+ 三态熔断器；整次分析另有总超时 | `app/core/resilience.py`、`llm_provider.py` |
+| **限流 / 幂等** | 令牌桶按客户端限流（429 + Retry-After）；`Idempotency-Key` 请求头保证重复提交只执行一次，并发重复请求共享结果 | `app/core/middleware.py`、`resilience.py` |
+| **Trace 可观测** | 每次分析一个 `run_id`，每个节点一个 span（耗时 / 状态 / LLM 调用 / 重试 / 降级 / token）；`GET /finance/runs/{run_id}` 可复盘 | `app/core/observability.py` |
+| **降级可见** | 行情 / 财报是否模拟、哪些字段是估算、LLM 降级了几次、哪些节点失败降级，全部写进响应的 `data_quality` 和研报顶部横幅；`STRICT_REAL_DATA=true` 时直接报错而不降级 | `app/services/analysis_service.py` |
+| **测试** | 84 个用例：风控阈值、熔断/重试/限流/幂等、图拓扑与并行、辩论熔断、记忆与压缩、服务层回归、量化打分单调性与消融实验自检 | `tests/` |
+
+运行测试：`pytest -q`（测试强制离线，全部通过，耗时约 7~10s）。
+
+新增接口：`GET /finance/runs`、`GET /finance/runs/{run_id}`、`GET /finance/status`；追问接口新增可选 `session_id`。
+
+## 🎛️ v3：权重驱动的确定性决策（与 LLM 是否在线无关）
+
+**核心原则：确定性工具算事实和分数 → 用户权重决定结论 → LLM 只负责解读与论证。**
+
+```
+各维度量化评分(0~10) ──┐
+ 基本面: 估值/盈利/成长/杠杆      │   基础分 = Σ 用户权重 × 维度评分
+ 技术面: 趋势/动量-反转/量能/波动率 ├──►  (缺数据的维度剔除，权重按比例分给其余维度)
+ 宏观: 沪深300 趋势与波动状态      │            │
+ 资金面: 主力净流入/市值 + 量能确认 ┘            ▼
+                                   最终分 = 基础分 + 多空辩论调整(有界 ±0.8)
+                                            │
+                      档位 / 仓位 ◄──────────┘──► ATR 止损 + 单笔风险预算仓位上限
+```
+- 改权重 → 基础分必然改变；LLM 给出任何分数（含离谱值）都不进入决策，只记为 `llm_score` 用于“分歧检测”。（测试：`tests/test_decision.py`）
+- **离线模式**：专家叙述由数据模板生成（明确标注“非大模型推理”），分数与在线时完全一致；在线时 LLM 的文字替换模板。
+- **新增技术指标**：ATR(14, Wilder)、20/5 日实现波动率及波动比、量比、OBV 斜率、MFI(14)、5/20 日涨跌幅、布林 %B/带宽、MA20/MA60。
+- **诚实降级**：资金流接口不可用时不再编造“净流入 1280 万”，该维度直接剔除；公告/新闻不可用时如实写“数据源暂不可用”。
+- **实证消融实验套件 (`experiments/`)**：
+  - **实验一：技术指标真实回测 (`indicator_backtest.py`)**：基于 2019~2025 年 28 只沪深大盘股真实日 K，验证复合因子与单因子的 1d/3d/5d 秩相关系数 (IC)、IC_IR 与净换手价差。详见 `experiments/results_indicator.md`。
+  - **实验二：多空辩论开/关消融 (`debate_ablation.py`)**：在严格晚于大模型训练截止期的时间窗口（2026 年）进行跨截面样本外评估，实测多空辩论对纯量化指标预测力无统计显著提升（95%CI 包含 0），论证辩论核心价值在于多模态冲突仲裁（如业绩暴增 vs 技术破位）。详见 `experiments/results_debate.md`。
+  - **实验三：技术面分项消融与时间段切分 (`component_ablation.py`)**：遵循严苛量化纪律切分 train (到2022) / valid (2023) / test (2024起) 防止过拟合，实测动量/反转分项具有稳定增量贡献。详见 `experiments/results_component.md`。
+- 新增环境变量：`BAND_STRONG_BUY / BAND_OVERWEIGHT / BAND_NEUTRAL / DEBATE_MAX_ADJUST`。
+
+### 已知局限（面试可直接讲）
+- **风控输入的可靠度**：真实财报接口只提供营收、净利润、资产负债率、ROE 等；总资产、经营现金流、利息费用、EBIT 是按经验系数推算的，已标记为 `estimated_fields`，**利息保障倍数检查因此被跳过而不是据此否决**。资产负债率与 VaR 两条硬红线不受影响。
+- **监管舆情检查未接入数据源**，在审计清单里如实标为“未检查”。
+- **离线模式**（无 API Key / 无外网）下专家与辩手的文字来自数据模板，不是真正的 Agent 推理；决策分数不受影响，所有降级的 LLM 调用都计入 `llm_fallback_calls`。离线时宏观维度使用的是标注为 simulated 的模拟指数。
+- **并行只降延迟，不改变分析结论**：三位专家互不读取对方产出，串行与并行的评分在测试中一致。端到端收益受限于辩论环本身是串行的（见基准）。
+- 记忆库是单机 SQLite；多实例部署需换成 MySQL/Redis。限流与幂等缓存是进程内的，同理。
+- 未使用 LangGraph checkpointer：单次分析是一次性短流程，持久化放在业务层（SQLite）；如需“断点续跑”再接入。
+- 模拟盘 JSON 持久化无并发写保护，仅适合单用户演示。
+
 ---
 
 ## 🏗️ 系统架构图
 
 ```mermaid
 flowchart TD
-    Start([用户输入: 标的代码 & 策略流派]) --> DataNode[数据准备与情报抽取节点\n行情/财报/主力资金/官方公告/滚动新闻]
+    Start([用户输入: 标的代码 & 策略权重]) --> DataNode[数据准备与情报抽取节点\n行情/财报/主力资金/官方公告/滚动新闻]
     
-    subgraph 专家投研层
+    subgraph 专家投研层 (Fan-Out 并发执行)
         DataNode --> Macro[宏观策略专家 Macro Agent]
-        Macro --> Fund[基本面与估值专家 Fundamental Agent\n杜邦拆解 + DCF现金流模型]
-        Fund --> Tech[量化技术专家 Technical Agent\nMACD / RSI / 布林带 / 支撑阻力]
+        DataNode --> Fund[基本面与估值专家 Fundamental Agent\n杜邦拆解 + DCF现金流模型]
+        DataNode --> Tech[量化技术专家 Technical Agent\nMACD / RSI / 布林带 / ATR / 波动率]
     end
     
+    Macro --> Merge[状态汇合与确定性量化评分节点\n四维量化打分 + 用户权重驱动聚合]
+    Fund --> Merge
+    Tech --> Merge
+    
     subgraph 多空辩论博弈与仲裁层
-        Tech --> Bull[多头首席辩手 Bull Advocate\n首轮立论: 催化剂 / 次轮反驳]
+        Merge --> Bull[多头首席辩手 Bull Advocate\n首轮立论: 催化剂 / 次轮反驳]
         Bull --> Bear[空头首席辩手 Bear Critic\n首轮批判: 风险警示 / 次轮质询]
-        Bear --> Arbiter[投委会主席仲裁官 Arbiter\n核心矛盾判定 / 仓位决议]
+        Bear --> Arbiter[投委会主席仲裁官 Arbiter\n核心矛盾判定 / 有界微调 ±0.8]
         Arbiter -->|未收敛且轮次<2| Bull
     end
     
     subgraph 合规风控与交付层
         Arbiter -->|已收敛或达到最大轮次| Risk[合规风控沙箱 Risk Guardrail\n10,000次蒙特卡洛VaR / 财务硬指标一票否决]
-        Risk --> Reporter[研报排版总编 Reporter Agent\n生成机构级结构化深度研报]
+        Risk --> Reporter[研报排版总编 Reporter Agent\n生成机构级结构化深度研报 & 决策贡献表]
         Reporter --> Output([展示终稿研报 / 联动模拟盘下单])
     end
 ```
@@ -83,29 +140,61 @@ flowchart TD
 │   │   ├── risk_guardrail.py       # 合规风控硬拦截沙箱
 │   │   └── reporter_agent.py       # 机构研报排版生成 Agent
 │   ├── api/                        # FastAPI 路由层
-│   │   ├── financial_router.py     # 投研分析与 SSE 流式接口、模型配置接口
+│   │   ├── financial_router.py     # 投研分析、Runs 追溯、SSE 流式接口、模型配置
 │   │   └── portfolio_router.py     # 模拟盘账户资产、委托撮合接口
-│   ├── core/                       # 核心底层与通用配置
+│   ├── core/                       # 工业级高可用韧性基础设施
 │   │   ├── config.py               # 全局超参数与环境配置加载器
-│   │   └── llm_provider.py         # OpenAI 协议兼容的大模型统一调度器
+│   │   ├── llm_provider.py         # OpenAI 协议兼容的大模型统一调度器
+│   │   ├── resilience.py           # 重试+指数退避+抖动、三态熔断器、令牌桶限流
+│   │   ├── observability.py        # 全链路 Trace/Span 调用追踪与性能统计
+│   │   └── middleware.py           # 幂等键拦截器 (Idempotency-Key)
 │   ├── graph/                      # 状态图编排层
-│   │   └── financial_graph.py      # LangGraph 投委会多智能体状态图拓扑定义
+│   │   ├── financial_graph.py      # LangGraph 投委会多智能体状态图拓扑 (Fan-Out/Fan-In)
+│   │   └── state_utils.py          # 状态合并与并发写隔离安全工具
+│   ├── memory/                     # 记忆管理系统
+│   │   ├── store.py                # SQLite 长期投研结论沉淀库 (支持历史对比)
+│   │   └── chat_memory.py          # 会话记忆与滑动窗口 LLM 摘要压缩
 │   ├── models/                     # Pydantic 数据规范与协议契约
 │   │   ├── agent_state.py          # 全局 LangGraph 状态机字典类型 (FinancialAgentState)
-│   │   ├── schemas.py              # 研报、行情、情报、多空辩论结构模型
+│   │   ├── schemas.py              # 研报、行情、情报、多空辩论、量化贡献表结构模型
 │   │   └── portfolio_schemas.py    # 模拟盘持仓、委托订单数据契约
+│   ├── services/                   # 业务逻辑与协调服务层
+│   │   ├── analysis_service.py     # 投研编排服务 (支持同步与 SSE 流式双通道)
+│   │   └── runs_service.py         # 历史 Run 记录检索与复盘服务
 │   └── tools/                      # 确定性量化分析与外部数据工具
-│       ├── market_data.py          # 行情历史与财报接口 (集成东财/新浪及离线沙箱)
+│       ├── scoring.py              # 【v3核心】四维量化打分引擎与权重聚合器
+│       ├── market_data.py          # 行情历史与财报接口 (集成东财/新浪/腾讯及离线沙箱)
 │       ├── market_intel.py         # 多源资金流、官方披露公告、滚动舆情抓取器
 │       ├── financial_metrics.py    # 杜邦拆解与三阶段 DCF 估值引擎
-│       ├── quant_indicators.py     # MACD、RSI、布林带技术形态量化引擎
+│       ├── quant_indicators.py     # MACD、RSI、布林带、ATR、波动率量化引擎
 │       ├── risk_calculator.py      # 10,000 次蒙特卡洛 VaR 模拟风险价值引擎
 │       └── portfolio_manager.py    # 模拟账户资产持久化与撮合管理
+├── experiments/                    # 【v3实证研究与消融实验套件】
+│   ├── data_loader.py              # 历史日 K 数据加载器 (支持断点缓存与双数据源兜底)
+│   ├── indicator_backtest.py       # 实验一：技术指标回测 (IC, IC_IR, 分位净价差)
+│   ├── debate_ablation.py          # 实验二：多空辩论 ON/OFF 样本外消融研究
+│   ├── component_ablation.py       # 实验三：技术面四分项消融与时间段切分 (防过拟合)
+│   ├── metrics.py                  # 块自助法 CI (Block Bootstrap)、Spearman 秩相关计算
+│   ├── results_indicator.md        # 实验一量化结果报告 (真实数据 2019~2025)
+│   ├── results_debate.md           # 实验二多空辩论消融评估报告 (未来样本外)
+│   └── results_component.md        # 实验三技术面子项消融报告 (Train/Valid/Test)
+├── tests/                          # 自动化测试套件 (83 个用例全部通过)
+│   ├── test_decision.py            # 确定性打分、权重驱动、档位与止损测试
+│   ├── test_experiments.py         # 消融实验自检测试 (合成数据零信号/植入信号)
+│   ├── test_graph.py               # 图拓扑结构、辩论环收敛与轮次熔断测试
+│   ├── test_handlers.py            # API 路由与输入校验测试
+│   ├── test_llm_provider.py        # LLM 客户端重试、容灾降级测试
+│   ├── test_memory.py              # SQLite 长期记忆与会话摘要压缩测试
+│   ├── test_resilience.py          # 熔断器、令牌桶限流、幂等键测试
+│   ├── test_risk_and_data.py       # 风控阈值一票否决、数据质量透传测试
+│   ├── test_schemas.py             # 数据模型契约测试
+│   └── test_service.py             # 业务服务层端到端集成测试
 ├── data/                           # 本地持久化数据目录 (模拟盘账本等)
 │   └── paper_portfolio.json        # 模拟盘账户数据
 ├── static/                         # 前端 Web 静态资源
 │   └── index.html                  # 现代化响应式投研交互看板
 ├── .env.example                    # 环境变量配置模板
+├── CHANGELOG.md                    # 详细版本升级与修改事实记录
 ├── main.py                         # 系统启动入口文件
 ├── requirements.txt                # Python 依赖清单
 └── README.md                       # 项目工程文档

@@ -9,6 +9,7 @@
 from datetime import datetime
 from typing import Dict, Any, List
 from app.agents.base_agent import BaseSpecialistAgent
+from app.tools.scoring import score_fundamental
 from app.models.agent_state import FinancialAgentState
 from app.models.schemas import SpecialistAgentOutput
 from app.tools.market_data import market_data_provider
@@ -81,34 +82,32 @@ class FundamentalAgent(BaseSpecialistAgent):
             {"role": "user", "content": user_content},
         ]
 
-        raw_reply = await self._call_llm(messages, json_mode=True)
+        raw_reply, live = await self._call_llm_ex(messages, json_mode=True)
 
-        default_fallback = {
-            "stance": "积极买入 (Strong Buy)" if dcf_res.margin_of_safety_pct >= 0 else "中性增持 (Hold)",
-            "score": 8.4 if dupont_res.calculated_roe > 20 else 6.8,
-            "summary": f"{target_name} 杜邦拆解 ROE 达 {dupont_res.calculated_roe}%，盈利成色极高；DCF 内在价值为 {dcf_res.intrinsic_value_per_share} 元，估值具良好防御性。",
+        # 决策分只来自确定性评分；LLM 的评分仅作参考
+        is_fin = any(k in target_name for k in ["银行", "证券", "保险", "信托"])
+        quant_score, comps = score_fundamental(dupont_res, dcf_res, financials, is_fin)
+        est = ", ".join(getattr(financials, "estimated_fields", []) or [])
+
+        fallback = {
+            "summary": (
+                f"{target_name} 基本面量化评分 {quant_score}/10：杜邦 ROE {dupont_res.calculated_roe}%"
+                f"（净利率 {dupont_res.net_profit_margin}%，权益乘数 {dupont_res.equity_multiplier}），"
+                f"DCF 内在价值 {dcf_res.intrinsic_value_per_share} 元，安全边际 {dcf_res.margin_of_safety_pct}%，"
+                f"净利润同比 {financials.net_profit_yoy}%，资产负债率 {financials.debt_to_asset_ratio}%。"
+                "（本段为数据模板生成，非大模型推理）"
+            ),
             "details": {
-                "roe_assessment": f"ROE 为 {dupont_res.calculated_roe}%，受 {dupont_res.net_profit_margin}% 净利润率深厚护城河驱动",
-                "dcf_margin_of_safety": f"安全边际为 {dcf_res.margin_of_safety_pct}%，处于 {dcf_res.valuation_status}",
-                "balance_sheet_health": f"资产负债率仅 {financials.debt_to_asset_ratio}%，偿债压力极小",
-                "growth_sustainability": "行业竞争格局稳固，具备较强提价能力与内生现金流支撑",
+                "roe_assessment": f"ROE {dupont_res.calculated_roe}%，归因：{dupont_res.quality_verdict}",
+                "dcf_margin_of_safety": f"安全边际 {dcf_res.margin_of_safety_pct}%，{dcf_res.valuation_status}",
+                "balance_sheet_health": f"资产负债率 {financials.debt_to_asset_ratio}%",
+                "growth_sustainability": f"净利润同比 {financials.net_profit_yoy}%",
             },
-            "key_points": [
-                f"高净利率 ({dupont_res.net_profit_margin}%) 验证行业定价权与品牌溢价",
-                f"经营现金流 ({financials.operating_cash_flow} 亿元) 对净利润覆盖率良好",
-                "关注宏观消费周期复苏斜率对终端动销速度的影响",
-            ],
+            "key_points": [f"分项得分(0~10)：{comps}"]
+            + ([f"部分财务字段为估算值：{est}"] if est else []),
         }
-
-        parsed_data = self._parse_json_safely(raw_reply, default_fallback)
-
-        fundamental_output = SpecialistAgentOutput(
-            agent_name=self.name,
-            stance=parsed_data.get("stance", "积极增配"),
-            score=float(parsed_data.get("score", 8.0)),
-            summary=parsed_data.get("summary", ""),
-            details=parsed_data.get("details", {}),
-            key_points=parsed_data.get("key_points", []),
+        fundamental_output = self.build_output(
+            quant_score=quant_score, components=comps, raw_reply=raw_reply, live=live, fallback=fallback,
         )
 
         log_item = {

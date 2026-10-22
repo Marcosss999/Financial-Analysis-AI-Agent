@@ -36,6 +36,25 @@ def _load_env_file(filepath: Path) -> None:
 _load_env_file(ENV_FILE)
 
 
+def _env_float(name: str, default: float) -> float:
+    """读取浮点型环境变量，非法值回退默认，避免因配置笔误导致启动失败"""
+    try:
+        return float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    return os.getenv(name, str(default)).lower() in ("true", "1", "yes")
+
+
 def save_env_llm_settings(api_key: str, base_url: str, model: str, temperature: float = 0.2) -> None:
     """持久化保存大模型配置到 .env 文件，并同步更新当前运行时环境变量"""
     os.environ["LLM_API_KEY"] = api_key.strip()
@@ -81,17 +100,29 @@ class LLMSettings(BaseModel):
     )
     DEFAULT_MODEL: str = Field(default_factory=lambda: os.getenv("LLM_DEFAULT_MODEL", "qwen-plus"))
     TEMPERATURE: float = Field(default_factory=lambda: float(os.getenv("LLM_TEMPERATURE", "0.2")))
-    REQUEST_TIMEOUT: int = Field(default=60, description="LLM HTTP 请求超时时间(秒)")
+    REQUEST_TIMEOUT: float = Field(
+        default_factory=lambda: _env_float("LLM_REQUEST_TIMEOUT", 60.0), description="单次 LLM 请求超时(秒)"
+    )
+    MAX_RETRIES: int = Field(
+        default_factory=lambda: _env_int("LLM_MAX_RETRIES", 2), description="应用层最大重试次数(指数退避)"
+    )
+    RETRY_BASE_DELAY: float = Field(default=0.5, description="重试退避基数(秒)")
+    BREAKER_FAILURE_THRESHOLD: int = Field(
+        default_factory=lambda: _env_int("LLM_BREAKER_THRESHOLD", 3), description="连续失败多少次后熔断"
+    )
+    BREAKER_RECOVERY_SECONDS: float = Field(
+        default_factory=lambda: _env_float("LLM_BREAKER_RECOVERY", 30.0), description="熔断后多久进入半开探测"
+    )
 
 
 class MultiAgentDebateSettings(BaseModel):
     """投委会多智能体协同与辩论控制超参数"""
     MAX_DEBATE_ROUNDS: int = Field(
-        default=2,
+        default_factory=lambda: _env_int("MAX_DEBATE_ROUNDS", 2),
         description="多空辩论（Bull vs Bear）的最大交互轮次，作为防止状态图无限循环的递归熔断器"
     )
     CONVERGENCE_DELTA: float = Field(
-        default=0.15,
+        default_factory=lambda: _env_float("CONVERGENCE_DELTA", 0.15),
         description="多空分歧度收敛容差阈值：当 |多头得分 - 空头得分| <= 阈值时提前达成共识"
     )
     BULL_INITIAL_WEIGHT: float = Field(default=0.5, description="多头证据初始可信度权重")
@@ -110,6 +141,7 @@ class QuantQuantEngineSettings(BaseModel):
     MONTE_CARLO_SIMULATIONS: int = Field(default=10000, description="蒙特卡洛模拟随机价格路径次数")
     VAR_CONFIDENCE_LEVEL: float = Field(default=0.95, description="VaR 风险价值置信水平 (95%)")
     VAR_HORIZON_DAYS: int = Field(default=5, description="VaR 预测时间窗口 (交易日)")
+    VAR_SEED: int = Field(default=42, description="蒙特卡洛随机种子(使用局部 Generator，不污染全局随机状态)")
 
     # 经典技术指标超参数
     RSI_PERIOD: int = Field(default=14, description="相对强弱指标 RSI 周期")
@@ -127,16 +159,63 @@ class RiskGuardrailSettings(BaseModel):
         description="是否启用确定性风控硬拦截沙箱"
     )
     MAX_DEBT_TO_ASSET_RATIO: float = Field(
-        default=0.75,
+        default_factory=lambda: _env_float("MAX_DEBT_TO_ASSET_RATIO", 0.75),
         description="资产负债率硬性警戒红线 (高于 75% 触发极度杠杆警示)"
     )
     MIN_INTEREST_COVERAGE: float = Field(
-        default=1.5,
+        default_factory=lambda: _env_float("MIN_INTEREST_COVERAGE_RATIO", 1.5),
         description="利息保障倍数硬性红线 (低于 1.5 判定为偿债高危风险)"
     )
+    FINANCIAL_INSTITUTION_MAX_DEBT_PCT: float = Field(
+        default=94.0, description="持牌金融机构资产负债率红线(%)，其负债含存款，口径不同于实体企业"
+    )
+    WARN_DEBT_PCT: float = Field(default=65.0, description="资产负债率预警线(%)，仅降级为 WARNING 不否决")
+    WARN_VAR_PCT: float = Field(default=12.0, description="VaR 预警线(%)，仅降级为 WARNING 不否决")
     MAX_ACCEPTABLE_VAR_95: float = Field(
-        default=0.18,
+        default_factory=lambda: _env_float("MAX_VAR_TOLERANCE", 0.18),
         description="单周 95% VaR 最大容忍潜在下行回撤 (大于 18% 直接触发下行风险拦截)"
+    )
+
+
+class DecisionSettings(BaseModel):
+    """确定性决策参数：评分 → 档位 → 仓位的映射，以及辩论调整幅度"""
+    BAND_STRONG_BUY: float = Field(default_factory=lambda: _env_float("BAND_STRONG_BUY", 7.5), description="≥ 该分：强烈买入")
+    BAND_OVERWEIGHT: float = Field(default_factory=lambda: _env_float("BAND_OVERWEIGHT", 6.3), description="≥ 该分：逢低增配")
+    BAND_NEUTRAL: float = Field(default_factory=lambda: _env_float("BAND_NEUTRAL", 4.8), description="≥ 该分：中性持有，低于则规避")
+    DEBATE_MAX_ADJUST: float = Field(
+        default_factory=lambda: _env_float("DEBATE_MAX_ADJUST", 0.8),
+        description="多空辩论对最终得分的最大调整幅度(±)。有界，保证用户设定的权重始终主导结论",
+    )
+    ATR_STOP_MULT: float = Field(default=2.0, description="止损距离 = ATR_STOP_MULT × ATR")
+    RISK_PER_TRADE_PCT: float = Field(default=1.0, description="单笔交易愿意承担的账户风险(%)，用于反推仓位上限")
+    LLM_DIVERGENCE_THRESHOLD: float = Field(default=2.5, description="LLM 评分与量化评分相差超过该值时标记为分歧")
+
+
+class EngineeringSettings(BaseModel):
+    """工程化稳定性与存储配置"""
+    ANALYSIS_TIMEOUT_SECONDS: float = Field(
+        default_factory=lambda: _env_float("ANALYSIS_TIMEOUT_SECONDS", 120.0), description="单次全流程分析总超时"
+    )
+    PARALLEL_EXPERTS: bool = Field(
+        default_factory=lambda: _env_bool("PARALLEL_EXPERTS", True), description="三位专家是否并行执行(fan-out/fan-in)"
+    )
+    STRICT_REAL_DATA: bool = Field(
+        default_factory=lambda: _env_bool("STRICT_REAL_DATA", False),
+        description="为 true 时，行情/财报抓取失败直接报错，而不是降级为模拟数据",
+    )
+    RATE_LIMIT_PER_MINUTE: int = Field(
+        default_factory=lambda: _env_int("RATE_LIMIT_PER_MINUTE", 30), description="每个客户端每分钟请求上限"
+    )
+    IDEMPOTENCY_TTL_SECONDS: float = Field(default=600.0, description="幂等键缓存有效期")
+    DB_PATH: str = Field(
+        default_factory=lambda: os.getenv("MEMORY_DB_PATH", str(ROOT_DIR / "data" / "memory.db")),
+        description="SQLite 记忆库路径",
+    )
+    CHAT_KEEP_RECENT_TURNS: int = Field(default=6, description="对话记忆保留原文的最近轮数，更早的压缩为摘要")
+    CHAT_CONTEXT_CHAR_BUDGET: int = Field(default=6000, description="拼入 prompt 的对话上下文字符预算")
+    CORS_ORIGINS: str = Field(
+        default_factory=lambda: os.getenv("CORS_ORIGINS", "http://127.0.0.1:8001,http://localhost:8001"),
+        description="允许的前端来源，逗号分隔",
     )
 
 
@@ -152,6 +231,8 @@ class Settings(BaseModel):
     debate: MultiAgentDebateSettings = Field(default_factory=MultiAgentDebateSettings)
     quant: QuantQuantEngineSettings = Field(default_factory=QuantQuantEngineSettings)
     risk: RiskGuardrailSettings = Field(default_factory=RiskGuardrailSettings)
+    eng: EngineeringSettings = Field(default_factory=EngineeringSettings)
+    decision: DecisionSettings = Field(default_factory=DecisionSettings)
 
 
 # 导出全局单例配置

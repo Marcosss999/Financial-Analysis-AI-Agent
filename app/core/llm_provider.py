@@ -6,15 +6,30 @@
 3. 内置高保真领域金融 Mock 引擎：在离线或无 API Key 场景下，按金融专家角色（宏观、基本面、技术面、多空辩论、风控仲裁、研报生成）输出严谨的专业金融研报与结构化 JSON 数据，保证系统无依赖端到端跑通。
 """
 
+import asyncio
 import json
 import logging
 import re
 import time
+from contextvars import ContextVar
 from typing import List, Dict, Any, AsyncGenerator, Optional
 from openai import AsyncOpenAI
 from app.core.config import settings, save_env_llm_settings
+from app.core.observability import get_trace
+from app.core.resilience import CircuitBreaker, retry_async
 
 logger = logging.getLogger(__name__)
+
+# 最近一次 chat() 是否来自真实远程模型（按 asyncio 任务隔离，并行专家互不干扰）
+_LAST_CALL_LIVE: ContextVar[bool] = ContextVar("llm_last_call_live", default=False)
+
+
+def last_call_was_live() -> bool:
+    return _LAST_CALL_LIVE.get()
+
+
+class LLMUnavailableError(RuntimeError):
+    """调用方声明不接受模拟响应(allow_mock=False)，而远程模型不可用时抛出"""
 
 
 class LLMProvider:
@@ -27,12 +42,18 @@ class LLMProvider:
             and len(settings.llm.API_KEY.strip()) > 5
         )
 
+        self.breaker = CircuitBreaker(
+            failure_threshold=settings.llm.BREAKER_FAILURE_THRESHOLD,
+            recovery_seconds=settings.llm.BREAKER_RECOVERY_SECONDS,
+        )
+
         if self.is_configured:
             self.client: Optional[AsyncOpenAI] = AsyncOpenAI(
                 api_key=settings.llm.API_KEY,
                 base_url=settings.llm.BASE_URL,
-                timeout=90.0,
-                max_retries=2,
+                timeout=settings.llm.REQUEST_TIMEOUT,
+                max_retries=0,  # 重试统一由应用层 retry_async 负责，避免 SDK 重试与应用层重试相乘
+
             )
         else:
             self.client = None
@@ -56,8 +77,9 @@ class LLMProvider:
             self.client = AsyncOpenAI(
                 api_key=settings.llm.API_KEY,
                 base_url=settings.llm.BASE_URL,
-                timeout=90.0,
-                max_retries=2,
+                timeout=settings.llm.REQUEST_TIMEOUT,
+                max_retries=0,  # 重试统一由应用层 retry_async 负责，避免 SDK 重试与应用层重试相乘
+
             )
         else:
             self.client = None
@@ -107,38 +129,92 @@ class LLMProvider:
                 "latency_ms": elapsed,
             }
 
+    def status(self) -> Dict[str, Any]:
+        """当前 LLM 运行模式与熔断器状态(用于 /health 与 trace)"""
+        return {
+            "mode": "live" if self.is_configured and self.client is not None else "mock",
+            "model": settings.llm.DEFAULT_MODEL,
+            "breaker": self.breaker.snapshot(),
+        }
+
+    def _record(self, started: float, retries: int, fallback: bool, failed: bool,
+                prompt_tokens: int = 0, completion_tokens: int = 0) -> None:
+        trace = get_trace()
+        if trace is not None:
+            trace.record_llm(latency_ms=(time.perf_counter() - started) * 1000, retries=retries,
+                             fallback=fallback, failed=failed,
+                             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+
     async def chat(
         self,
         messages: List[Dict[str, str]],
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         json_mode: bool = False,
+        allow_mock: bool = True,
     ) -> str:
         """
-        统一异步非流式对话调用
-        :param messages: 角色消息列表 [{"role": "system", ...}, {"role": "user", ...}]
-        :param model: 模型名，默认采用 settings.llm.DEFAULT_MODEL
-        :param temperature: 采样温度
-        :param json_mode: 是否强制输出合法 JSON
-        :return: 模型回答文本
+        统一异步非流式对话调用，带：单次超时 + 指数退避重试 + 熔断 + 降级留痕。
+        降级(无 Key / 熔断打开 / 重试耗尽)时返回本地模拟响应，同时在当前 trace 里记录 fallback，
+        因此一份报告里有多少内容来自模拟引擎是可以被统计和展示的，而不是静默混入。
         """
+        started = time.perf_counter()
+        _LAST_CALL_LIVE.set(False)
         if not self.is_configured or self.client is None:
+            self._record(started, 0, fallback=True, failed=False)
+            if not allow_mock:
+                raise LLMUnavailableError("未配置 LLM，且调用方不接受模拟响应")
             return self._mock_financial_response(messages)
 
-        try:
-            extra_kwargs: Dict[str, Any] = {}
-            if json_mode:
-                extra_kwargs["response_format"] = {"type": "json_object"}
+        if not self.breaker.allow():
+            logger.warning("[LLMProvider] 熔断器打开，跳过远程调用并直接降级。")
+            self._record(started, 0, fallback=True, failed=True)
+            if not allow_mock:
+                raise LLMUnavailableError("熔断器打开，且调用方不接受模拟响应")
+            return self._mock_financial_response(messages)
 
+        extra_kwargs: Dict[str, Any] = {}
+        if json_mode:
+            extra_kwargs["response_format"] = {"type": "json_object"}
+
+        usage = {"p": 0, "c": 0}
+
+        async def _call() -> str:
             response = await self.client.chat.completions.create(
                 model=model or settings.llm.DEFAULT_MODEL,
                 messages=messages,
                 temperature=temperature if temperature is not None else settings.llm.TEMPERATURE,
                 **extra_kwargs,
             )
-            return response.choices[0].message.content or ""
-        except Exception as e:
-            logger.warning(f"[LLMProvider] 远程模型调用异常 ({e})，平滑降级至本地金融高保真模拟引擎。")
+            text = response.choices[0].message.content or ""
+            if not text.strip():
+                raise ValueError("模型返回空内容")  # 空响应视为失败，触发重试
+            u = getattr(response, "usage", None)
+            if u is not None:
+                usage["p"] = getattr(u, "prompt_tokens", 0) or 0
+                usage["c"] = getattr(u, "completion_tokens", 0) or 0
+            return text
+
+        try:
+            text, retries = await retry_async(
+                _call,
+                retries=settings.llm.MAX_RETRIES,
+                base_delay=settings.llm.RETRY_BASE_DELAY,
+                timeout=settings.llm.REQUEST_TIMEOUT,
+            )
+            self.breaker.record_success()
+            _LAST_CALL_LIVE.set(True)
+            self._record(started, retries, fallback=False, failed=False,
+                         prompt_tokens=usage["p"], completion_tokens=usage["c"])
+            return text
+        except (Exception, asyncio.CancelledError) as e:  # 含 CancelledError，保证半开探测位一定被释放
+            self.breaker.record_failure()
+            if isinstance(e, asyncio.CancelledError):
+                raise
+            logger.warning(f"[LLMProvider] 远程模型调用在重试后仍失败 ({type(e).__name__}: {e})，降级至本地模拟引擎。")
+            self._record(started, settings.llm.MAX_RETRIES, fallback=True, failed=True)
+            if not allow_mock:
+                raise LLMUnavailableError(f"远程模型不可用: {e}") from e
             return self._mock_financial_response(messages)
 
     async def chat_stream(
@@ -311,6 +387,8 @@ class LLMProvider:
         latest_question = user_messages[-1] if user_messages else ""
         user_content = " ".join(user_messages)
         user_content_lower = user_content.lower()
+        # 旧版本这里漏定义 full_prompt：任何没命中前面分支的提示词(例如没有 system 消息的普通调用)都会在第 7 个分支抛 NameError
+        full_prompt = f"{system_content} {user_content_lower}"
 
         # 动态提取标的名与财务指标
         target_name = "标的资产"

@@ -11,7 +11,9 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
-from app.core.llm_provider import llm_provider
+from app.core.llm_provider import llm_provider, last_call_was_live
+from app.models.schemas import SpecialistAgentOutput
+from app.tools.scoring import stance_from_score
 from app.models.agent_state import FinancialAgentState
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,50 @@ class BaseSpecialistAgent(ABC):
             messages=messages,
             temperature=self.temperature,
             json_mode=json_mode,
+        )
+
+    async def _call_llm_ex(self, messages: List[Dict[str, str]], json_mode: bool = True) -> "tuple[str, bool]":
+        """调用 LLM 并返回 (文本, 是否来自真实远程模型)。离线/熔断/重试耗尽时 live=False，文本为本地模拟内容"""
+        text = await self._call_llm(messages, json_mode=json_mode)
+        return text, last_call_was_live()
+
+    def build_output(
+        self,
+        *,
+        quant_score: float,
+        components: Dict[str, float],
+        raw_reply: str,
+        live: bool,
+        fallback: Dict[str, Any],
+        extra_details: Optional[Dict[str, Any]] = None,
+    ) -> SpecialistAgentOutput:
+        """
+        组装专家产出。关键规则：
+        - score / stance 恒由确定性量化评分决定，与 LLM 是否在线无关；
+        - LLM 在线时：采用 LLM 的 summary/details/key_points 作为解读文字，其主观评分只记为 llm_score(参考)；
+        - LLM 不在线时：不使用任何模拟引擎的文字，改用基于数据事实生成的模板叙述。
+        """
+        parsed = self._parse_json_safely(raw_reply, {}) if live else {}
+        use_llm_text = live and bool(parsed.get("summary"))
+        src = parsed if use_llm_text else fallback
+        details = dict(src.get("details") or {})
+        if extra_details:
+            details.update(extra_details)
+        llm_score = None
+        if use_llm_text and parsed.get("score") is not None:
+            llm_score = to_score(parsed.get("score"), quant_score)
+            details["llm_stance"] = parsed.get("stance", "")
+        return SpecialistAgentOutput(
+            agent_name=self.name,
+            stance=stance_from_score(quant_score),
+            score=round(quant_score, 2),
+            summary=str(src.get("summary", "")),
+            details=details,
+            key_points=list(src.get("key_points") or []),
+            quant_score=round(quant_score, 2),
+            llm_score=llm_score,
+            score_components=components,
+            score_source="quant+llm_narrative" if use_llm_text else "quant+template_narrative",
         )
 
     def _parse_json_safely(self, raw_text: str, default_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -77,3 +123,21 @@ class BaseSpecialistAgent(ABC):
 
         logger.warning(f"[{self.name}] 无法从模型回复中提取合法 JSON，启用默认保真结构。")
         return default_data or {}
+
+
+def to_score(value, default: float, lo: float = 0.0, hi: float = 10.0) -> float:
+    """
+    把 LLM 返回的分数安全转成 [lo, hi] 内的浮点数。
+    LLM 可能返回 "7.5/10"、"约8分"、null、负数或 15 等脏值；这里统一容错并限幅，
+    避免一次格式漂移让整条分析链路抛 ValueError，也避免越界分数污染共识分。
+    """
+    import re as _re
+    try:
+        if isinstance(value, (int, float)):
+            num = float(value)
+        else:
+            m = _re.search(r"-?\d+(?:\.\d+)?", str(value))
+            num = float(m.group()) if m else float(default)
+    except (TypeError, ValueError):
+        num = float(default)
+    return max(lo, min(hi, num))

@@ -15,9 +15,33 @@
 from datetime import datetime
 from typing import Dict, Any, List
 from app.core.config import settings
-from app.agents.base_agent import BaseSpecialistAgent
+from app.agents.base_agent import BaseSpecialistAgent, to_score
 from app.models.agent_state import FinancialAgentState
 from app.models.schemas import DebateTurn, ArbiterVerdict
+from app.tools.scoring import (
+    DIM_LABELS, aggregate, atr_risk_sizing, debate_adjustment, verdict_from_score,
+)
+
+
+def _dim_extremes(state: FinancialAgentState):
+    """取已有数据的维度中得分最高/最低者，用于离线模板里的“多头论据/空头论据”，保证文字来自数据而非预设立场"""
+    ds = {k: v for k, v in (state.get("dimension_scores") or {}).items() if v is not None}
+    if not ds:
+        return None, None
+    hi = max(ds, key=ds.get)
+    lo = min(ds, key=ds.get)
+    return (hi, ds[hi]), (lo, ds[lo])
+
+
+def _breakdown_line(state: FinancialAgentState) -> str:
+    bd = state.get("score_breakdown") or []
+    parts = []
+    for b in bd:
+        if b.get("score") is None:
+            parts.append(f"{b['label']}:无数据")
+        else:
+            parts.append(f"{b['label']} {b['score']}分×权重{b['effective_weight']:.0%}")
+    return "；".join(parts) if parts else "暂无"
 
 
 class BullAgent(BaseSpecialistAgent):
@@ -56,27 +80,24 @@ class BullAgent(BaseSpecialistAgent):
             if p_start > 0:
                 price_gain_60d = round(((p_end - p_start) / p_start) * 100.0, 1)
 
-        # 结合主力资金动量赋分
-        flow_score = 7.5
-        if intel:
-            flow_score = 8.8 if intel.is_main_inflow else 6.2
-
-        f_score = fund.score if fund else 7.8
-        t_score = tech.score if tech else 7.2
-        m_score = macro.score if macro else 7.0
-        base_bull = round(f_score * w_fund + t_score * w_tech + m_score * w_macro + flow_score * w_flow, 1)
+        # 多头基础信念 = 用户权重加权后的基础分(确定性)；缺失时才回退到专家分按权重现算
+        base_bull = state.get("base_score")
+        if base_bull is None:
+            parts = [(o.score, w) for o, w in ((fund, w_fund), (tech, w_tech), (macro, w_macro)) if o is not None]
+            tw = sum(w for _, w in parts) or 1.0
+            base_bull = sum(sc * w for sc, w in parts) / tw if parts else 5.0
 
         if current_round > 1:
-            # 第二轮辩论：向空方的防守质疑进行理性微调
+            # 第二轮：吸收空头上一轮的风险判断后做有限修正
             last_bear_s = state.get("bear_score", 5.5)
-            dynamic_bull_score = round(base_bull * 0.85 + (10.0 - last_bear_s) * 0.15, 1)
+            dynamic_bull_score = round(max(0.0, min(10.0, base_bull * 0.85 + (10.0 - last_bear_s) * 0.15)), 1)
         else:
-            dynamic_bull_score = min(9.5, max(6.0, round(base_bull, 1)))
+            dynamic_bull_score = round(max(0.0, min(10.0, base_bull)), 1)
 
         intel_summary = (
             f"主力资金流向: {intel.main_capital_flow if intel else '暂无'}; "
-            f"官方重大公告: {intel.announcements[0] if (intel and intel.announcements) else '近期经营无异常'}; "
-            f"市场舆情: {intel.news_headlines[0] if (intel and intel.news_headlines) else '行业排产稳定'}"
+            f"官方重大公告: {intel.announcements[0] if (intel and intel.announcements) else '暂无数据'}; "
+            f"市场舆情: {intel.news_headlines[0] if (intel and intel.news_headlines) else '暂无数据'}"
         )
 
         if current_round == 1:
@@ -96,8 +117,10 @@ class BullAgent(BaseSpecialistAgent):
                 f"策略模式: {style} (基本面 {int(w_fund*100)}%, 技术 {int(w_tech*100)}%, 宏观 {int(w_macro*100)}%, 资金 {int(w_flow*100)}%)\n"
                 f"近60日价格动量涨幅: {price_gain_60d}%\n"
                 f"全网多源情报事实: {intel_summary}\n"
-                f"基本面与估值: {fund.summary if fund else '财务稳健'}\n"
-                f"量化技术形态: {tech.summary if tech else '走势良好'}\n"
+                f"【量化评分与权重贡献】{_breakdown_line(state)}\n"
+                f"基本面与估值: {fund.summary if fund else '(基本面专家无产出)'}\n"
+                f"量化技术形态: {tech.summary if tech else '(技术面专家无产出)'}\n"
+                f"宏观/市场环境: {macro.summary if macro else '(宏观专家无产出)'}\n"
                 "请发表有力的第一轮进攻立论。"
             )
         else:
@@ -120,30 +143,32 @@ class BullAgent(BaseSpecialistAgent):
                 "请对空头的观点展开点对点驳论，阐明为何其过分悲观。"
             )
 
-        raw = await self._call_llm([{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}])
+        raw, live = await self._call_llm_ex([{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}])
 
-        default_catalysts = [
-            f"{target_name} 核心主营产品市占率高且具备产业链强势定价权，抗周期韧性强",
-            f"多源情报印证：{intel.main_capital_flow if intel else '主力资金平稳'}，筹码具备抗跌防御垫",
-            "DCF 绝对估值模型测算每股公允价值具备充足的安全边际"
-        ]
+        hi, lo = _dim_extremes(state)
+        default_catalysts = []
+        if hi:
+            default_catalysts.append(f"最强维度：{DIM_LABELS[hi[0]]}量化评分 {hi[1]}/10")
+        default_catalysts.append(f"资金面：{intel.main_capital_flow if intel else '暂无数据'}")
+        if fund and fund.score_components:
+            default_catalysts.append(f"估值/盈利分项(0~10)：{fund.score_components}")
         if price_gain_60d > 15.0 and style in ["momentum", "short_term"]:
-            default_catalysts.insert(0, f"【右侧主升浪动量】近 60 日股价突破上行（累积 +{price_gain_60d}%），均线系统呈现强势右侧多头排列")
+            default_catalysts.insert(0, f"近 60 日涨幅 +{price_gain_60d}%，趋势延续是动量风格下的多头论据")
         elif price_gain_60d < -15.0 and style == "deep_value":
-            default_catalysts.insert(0, f"【左侧极端错杀黄金坑】近 60 日大幅深蹲回调 {price_gain_60d}%，历史估值折价已打满，提供充足逆向安全边际")
+            default_catalysts.insert(0, f"近 60 日回调 {price_gain_60d}%，若估值折价成立则提供逆向安全边际")
 
         fallback = {
             "conviction_score": dynamic_bull_score,
-            "core_thesis": f"{target_name} 具备坚实的商业护城河与内生现金流驱动力，当前估值安全边际明确，多头共振蓄势突破。",
+            "core_thesis": f"{target_name} 多头视角（模板生成，非大模型推理）：权重加权基础信念 {dynamic_bull_score}/10。{_breakdown_line(state)}。",
             "catalysts": default_catalysts[:3],
             "rebuttals": [
-                "空头所担忧的短期波动已在近几周走势中充分消化计提 (Priced-in)，缺乏继续深幅杀估值的边际增量",
-                "主力大单持续沉淀，下档均线密集区提供强劲承接力，风险收益比严重偏向多头"
+                f"对空头风险的回应：基础分由用户设定权重加权得出（{_breakdown_line(state)}）"
             ] if current_round > 1 else [],
         }
 
-        res = self._parse_json_safely(raw, fallback)
-        score = float(res.get("conviction_score") or dynamic_bull_score)
+        # 只有真实 LLM 在线才采用其信念分与文字；离线用确定性基础信念 + 数据模板
+        res = self._parse_json_safely(raw, fallback) if live else fallback
+        score = to_score(res.get("conviction_score"), dynamic_bull_score)
         core_thesis = res.get("core_thesis") or fallback["core_thesis"]
         catalysts = res.get("catalysts") or fallback["catalysts"]
         rebuttals = res.get("rebuttals", [])
@@ -199,6 +224,8 @@ class BearAgent(BaseSpecialistAgent):
                 price_gain_60d = round(((p_end - p_start) / p_start) * 100.0, 1)
 
         base_risk = 4.2
+        t_out = state.get("technical_output")
+        ind = state.get("indicators_result")
         if debt_ratio > 65.0:
             base_risk += 1.8
         elif debt_ratio > 50.0:
@@ -217,16 +244,22 @@ class BearAgent(BaseSpecialistAgent):
         elif price_gain_60d < -25.0:
             base_risk = max(3.6, base_risk - 0.8)
 
+        # 波动率体制与短线风险：高波动、波动放大都增加空头论据
+        if ind is not None and ind.realized_vol_20 > 50.0:
+            base_risk += 0.8
+        if ind is not None and ind.vol_regime > 1.8:
+            base_risk += 0.4
+
         if current_round > 1:
             last_bull_s = state.get("bull_score", 8.0)
-            dynamic_bear_score = round(base_risk * 0.75 + (10.0 - last_bull_s) * 0.25, 1)
+            dynamic_bear_score = round(max(0.0, min(10.0, base_risk * 0.75 + (10.0 - last_bull_s) * 0.25)), 1)
         else:
-            dynamic_bear_score = round(min(8.8, max(4.0, base_risk)), 1)
+            dynamic_bear_score = round(max(0.0, min(10.0, base_risk)), 1)
 
         intel_summary = (
             f"主力资金流向: {intel.main_capital_flow if intel else '暂无'}; "
-            f"官方重大公告: {intel.announcements[0] if (intel and intel.announcements) else '近期经营无异常'}; "
-            f"市场舆情: {intel.news_headlines[0] if (intel and intel.news_headlines) else '行业排产稳定'}"
+            f"官方重大公告: {intel.announcements[0] if (intel and intel.announcements) else '暂无数据'}; "
+            f"市场舆情: {intel.news_headlines[0] if (intel and intel.news_headlines) else '暂无数据'}"
         )
 
         if current_round == 1:
@@ -244,6 +277,9 @@ class BearAgent(BaseSpecialistAgent):
                 f"标的: {ticker} ({target_name})\n"
                 f"近60日价格累积涨幅: {price_gain_60d}%\n"
                 f"财务与估值: PE(TTM): {pe}x, 资产负债率: {debt_ratio}%, 波动率VaR: {var_pct}%\n"
+                f"【量化评分与权重贡献】{_breakdown_line(state)}\n"
+                + (f"短线风险: ATR={ind.atr_14}({ind.atr_pct}%), 20日实现波动率={ind.realized_vol_20}%, 波动比={ind.vol_regime}\n" if ind is not None else "")
+                +
                 f"情报事实: {intel_summary}\n"
                 f"多头首轮陈述: {bull_arg}\n"
                 "请发起尖锐的空头第一轮防守批判。"
@@ -267,28 +303,29 @@ class BearAgent(BaseSpecialistAgent):
                 "请向多头展开深入质询，指明为何不可掉以轻心。"
             )
 
-        raw = await self._call_llm([{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}])
+        raw, live = await self._call_llm_ex([{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}])
 
-        default_vulns = [
-            "应收账款周转天数若持续拉长，可能对自由现金流质量形成潜在抽水压制",
-            "行业潜在新进入者扩产可能引发下一阶段恶性价格内卷，毛利率承压",
-            "历史波动率在季报披露日前后显著放大，右侧追高盈亏比不佳"
-        ]
+        hi, lo = _dim_extremes(state)
+        default_vulns = []
+        if lo:
+            default_vulns.append(f"最弱维度：{DIM_LABELS[lo[0]]}量化评分 {lo[1]}/10")
+        default_vulns.append(f"估值与杠杆：PE(TTM) {pe}x，资产负债率 {debt_ratio}%，VaR {var_pct}%")
+        if ind is not None:
+            default_vulns.append(f"短线波动：20日实现波动率 {ind.realized_vol_20}%，5/20日波动比 {ind.vol_regime}，ATR {ind.atr_pct}% 现价")
         if price_gain_60d > 20.0:
-            default_vulns.insert(0, f"【预期抢跑透支警示】近 60 日股价已累积提前大涨 +{price_gain_60d}%，市场抢跑计入了过多乐观假设，警惕利好兑现后的获利盘踩踏 (Priced-in)")
+            default_vulns.insert(0, f"近 60 日已上涨 +{price_gain_60d}%，需警惕利好兑现后的回吐")
 
         fallback = {
             "conviction_score": dynamic_bear_score,
-            "core_thesis": f"{target_name} 估值需审慎防守看待，市场预期过于饱满，需警惕原材料成本波动与外需走弱带来的杀估值风险。",
+            "core_thesis": f"{target_name} 空头视角（模板生成，非大模型推理）：风险分 {dynamic_bear_score}/10，由负债率、估值、VaR、近期涨幅与波动率体制规则化累加。",
             "vulnerabilities": default_vulns[:3],
             "counter_critiques": [
-                "多头所称的催化剂多属中长期愿景，短期面临上方近 20 日密集成交区压力压顶，量能若跟不上极易诱多冲高回落",
-                "资产负债率与刚性利息开支在宏观复苏斜率放缓时会放大财务弹性风险"
+                f"多头论据依赖的基础分来自权重设定：{_breakdown_line(state)}；权重偏向的维度若失真，结论同步失真"
             ] if current_round > 1 else [],
         }
 
-        res = self._parse_json_safely(raw, fallback)
-        score = float(res.get("conviction_score") or dynamic_bear_score)
+        res = self._parse_json_safely(raw, fallback) if live else fallback
+        score = to_score(res.get("conviction_score"), dynamic_bear_score)
         core_thesis = res.get("core_thesis") or fallback["core_thesis"]
         vulns = res.get("vulnerabilities") or fallback["vulnerabilities"]
         critiques = res.get("counter_critiques", [])
@@ -328,13 +365,58 @@ class ArbiterAgent(BaseSpecialistAgent):
         bear_score = state.get("bear_score", 5.0)
         current_round = state.get("current_debate_round", 1)
 
-        divergence = abs(bull_score - bear_score)
-
         style = state.get("strategy_style") or "balanced"
         w_fund = state.get("fundamental_weight", 0.40)
         w_tech = state.get("technical_weight", 0.35)
         w_macro = state.get("macro_weight", 0.15)
         w_flow = state.get("capital_flow_weight", 0.10)
+
+        debate_enabled = state.get("enable_debate", True)
+        ind = state.get("indicators_result")
+
+        # ---- 1. 基础分：用户权重 × 各维度量化评分(由 experts_join 计算；缺失时现算) ----
+        base_score = state.get("base_score")
+        breakdown = state.get("score_breakdown") or []
+        if base_score is None:
+            scores = {"fundamental": getattr(state.get("fundamental_output"), "quant_score", None),
+                      "technical": getattr(state.get("technical_output"), "quant_score", None),
+                      "macro": getattr(state.get("macro_output"), "quant_score", None),
+                      "capital_flow": None}
+            agg = aggregate(scores, {"fundamental": w_fund, "technical": w_tech, "macro": w_macro,
+                                     "capital_flow": w_flow})
+            base_score, breakdown = agg["base_score"], agg["breakdown"]
+
+        # ---- 2. 辩论只做有界调整；关闭辩论则不调整 ----
+        if not debate_enabled:
+            adj = 0.0
+            bull_score, bear_score = base_score, round(10.0 - base_score, 1)
+            experts = [state.get("fundamental_output"), state.get("technical_output"), state.get("macro_output")]
+            bull_arg = "(已关闭多空辩论，以下为三位专家的结论摘要)\n" + "\n".join(
+                f"- {o.agent_name}: {o.stance} ({o.score}) {o.summary}" for o in experts if o is not None
+            )
+            bear_arg = ""
+        else:
+            adj = debate_adjustment(bull_score, bear_score)
+
+        divergence = abs(bull_score - bear_score)
+        consensus_score = round(max(0.0, min(10.0, base_score + adj)), 2)
+        verdict_choice, position_choice = verdict_from_score(consensus_score)
+
+        # ---- 3. ATR 风险预算：止损位、仓位上限、盈亏比(全部确定性) ----
+        sizing = atr_risk_sizing(ind)
+        if sizing["risk_cap_position_pct"] is not None:
+            position_choice = f"{position_choice} | ATR 风险预算仓位上限 ≈ {sizing['risk_cap_position_pct']}%"
+        if sizing["atr_stop_price"] is not None and ind is not None and ind.resistance_level > ind.last_close:
+            reward = ind.resistance_level - ind.last_close
+            risk = ind.last_close - sizing["atr_stop_price"]
+            rr_text = f"盈亏比约 {reward / risk:.1f}:1（至阻力位 {ind.resistance_level} 元 vs 至 ATR 止损 {sizing['atr_stop_price']} 元）"
+        else:
+            rr_text = "盈亏比未估算（缺少 ATR 或阻力位数据）"
+        tactics_det = (
+            f"以 {settings.decision.ATR_STOP_MULT:g}×ATR 设止损：{sizing['atr_stop_price']} 元（距现价 {sizing['atr_stop_pct']}%）；"
+            f"单笔风险预算 {settings.decision.RISK_PER_TRADE_PCT:g}% 对应仓位上限 {sizing['risk_cap_position_pct']}%。"
+            if sizing["atr_stop_price"] is not None else "缺少 ATR 数据，未生成止损建议。"
+        )
 
         style_names = {
             "momentum": "动量主升突破模式",
@@ -345,77 +427,53 @@ class ArbiterAgent(BaseSpecialistAgent):
         }
         style_name = style_names.get(style, "机构均衡配置模式")
 
-        # 动态加权共识得分
-        bull_coef = 0.65 if style in ["momentum", "short_term"] else (0.48 if style == "deep_value" else 0.55)
-        bear_coef = 1.0 - bull_coef
-        consensus_score = round(bull_score * bull_coef + (10.0 - bear_score) * bear_coef, 1)
-
-        if consensus_score >= 8.2:
-            verdict_choice = "强烈买入 (Strong Buy)"
-            position_choice = "60% ~ 75% (重仓配置 / 积极进攻)"
-        elif consensus_score >= 7.2:
-            verdict_choice = "逢低增配 (Overweight / Buy on Dips)"
-            position_choice = "45% ~ 55% (标准配置 / 稳健逢低吸筹)"
-        elif consensus_score >= 6.0:
-            verdict_choice = "中性持有 (Neutral / Hold)"
-            position_choice = "25% ~ 35% (防守性底仓 / 保持观望)"
-        else:
-            verdict_choice = "建议规避 (Underweight / Caution)"
-            position_choice = "10% 以下 (轻仓或空仓防守)"
-
-        # 核心分歧点提炼
-        battleground = f"【第{current_round}轮争议焦点】：多头依据主力抢筹与DCF安全边际看多 vs 空头紧盯上方阻力位承压与估值泡沫"
+        hi, lo = _dim_extremes(state)
+        contradiction = (f"{DIM_LABELS[hi[0]]}({hi[1]}) vs {DIM_LABELS[lo[0]]}({lo[1]})" if hi and lo and hi[0] != lo[0]
+                         else "各维度评分一致，无显著分歧")
+        battleground = f"【第{current_round}轮争议焦点】：{contradiction}"
 
         system_prompt = (
-            "你是顶级投资机构投委会主席 (Investment Committee Chairman)。\n"
-            "请客观审视多头与空头的激烈对抗辩论，调和矛盾，评估不对称盈亏比，出具终审投资裁决书。\n"
-            "输出必须为严格合法的 JSON 对象：\n"
+            "你是顶级投资机构投委会主席。结论档位、分数、仓位与止损均已由确定性规则算出，你不需要也不得更改它们。\n"
+            "你只需用 2~3 句话解释：为什么多空分歧不改变/小幅改变基础分，并点出最需要跟踪的风险。\n"
+            "输出必须为严格合法的 JSON：\n"
             "{\n"
-            '  "final_verdict": "终审决议",\n'
-            '  "consensus_score": 0.0到10.0之间的综合加权共识得分,\n'
-            '  "target_position_pct": "建议组合配置权重",\n'
-            '  "arbitration_summary": "多空分歧调和与终局裁决逻辑 (120字左右)",\n'
-            '  "core_contradiction": "本次审议最核心的矛盾对立面 (30字以内)",\n'
-            '  "risk_reward_ratio": "评估不对称盈亏比 (如: 盈亏比 2.5:1，赔率占优)",\n'
-            '  "entry_tactics": "具体交易执行、分批吸筹节奏与止损线安排"\n'
+            '  "arbitration_summary": "分歧调和与裁决逻辑 (120字左右)",\n'
+            '  "core_contradiction": "本次审议最核心的矛盾 (30字以内)"\n'
             "}"
         )
-
         user_content = (
             f"标的: {ticker} ({target_name})\n"
-            f"策略模式: {style_name} (基本面 {int(w_fund*100)}%, 技术 {int(w_tech*100)}%, 宏观 {int(w_macro*100)}%, 资金 {int(w_flow*100)}%)\n"
-            f"当前辩论轮次: 第 {current_round} 轮\n"
-            f"参考综合共识分: {consensus_score}\n"
+            f"策略模式: {style_name}\n"
+            f"【确定性评分】基础分 {base_score}（{_breakdown_line(state)}），辩论调整 {adj:+.2f}，最终 {consensus_score} → {verdict_choice}\n"
             f"【多头陈述 (置信分 {bull_score})】: {bull_arg}\n"
             f"【空头陈述 (风险分 {bear_score})】: {bear_arg}\n"
-            f"当前多空分歧度: {divergence:.2f}\n"
-            "请出具投委会终审裁定书。"
         )
 
-        raw = await self._call_llm([{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}])
-        fallback = {
-            "final_verdict": verdict_choice,
-            "consensus_score": consensus_score,
-            "target_position_pct": position_choice,
-            "arbitration_summary": f"投委会基于【{style_name}】综合评定：认可多头对内生估值修复与资金净流入的论证，同时吸收空头关于上方阻力位与防守纪律的告诫，出具平衡配置决议。",
-            "core_contradiction": "内生估值修复弹性 vs 上方技术形态阻力",
-            "risk_reward_ratio": "盈亏比约为 2.2:1 (向上空间大于潜在回撤)",
-            "entry_tactics": "建议分 3 批在回调至均线支撑位时梯次吸筹，设置 7% 动态追踪止损线。",
-        }
+        raw, live = await self._call_llm_ex([{"role": "system", "content": system_prompt}, {"role": "user", "content": user_content}])
+        parsed = self._parse_json_safely(raw, {}) if live else {}
+        fallback_summary = (
+            f"按【{style_name}】权重加权基础分 {base_score}；多空辩论调整 {adj:+.2f}（上限 ±{settings.decision.DEBATE_MAX_ADJUST:g}）；"
+            f"最终 {consensus_score} → {verdict_choice}。主要分歧：{contradiction}。（模板生成，非大模型推理）"
+        )
 
-        parsed = self._parse_json_safely(raw, fallback)
-
+        # 档位 / 分数 / 仓位 / 止损均为确定性结果，LLM 只提供解释性文字
         arbiter_verdict = ArbiterVerdict(
-            final_verdict=parsed.get("final_verdict") or verdict_choice,
-            consensus_score=float(parsed.get("consensus_score") or consensus_score),
-            target_position_pct=parsed.get("target_position_pct") or position_choice,
-            arbitration_summary=parsed.get("arbitration_summary") or fallback["arbitration_summary"],
-            core_contradiction=parsed.get("core_contradiction") or fallback["core_contradiction"],
-            risk_reward_ratio=parsed.get("risk_reward_ratio") or fallback["risk_reward_ratio"],
-            entry_tactics=parsed.get("entry_tactics") or fallback["entry_tactics"],
+            final_verdict=verdict_choice,
+            consensus_score=consensus_score,
+            target_position_pct=position_choice,
+            arbitration_summary=str(parsed.get("arbitration_summary") or fallback_summary),
+            core_contradiction=str(parsed.get("core_contradiction") or contradiction),
+            risk_reward_ratio=rr_text,
+            entry_tactics=tactics_det,
+            base_score=base_score,
+            debate_adjustment=adj,
+            score_breakdown=breakdown,
+            atr_stop_price=sizing["atr_stop_price"],
+            atr_stop_pct=sizing["atr_stop_pct"],
+            risk_cap_position_pct=sizing["risk_cap_position_pct"],
         )
 
-        debate_turn = DebateTurn(
+        debate_turn = None if not debate_enabled else DebateTurn(
             round_index=current_round,
             stage_name="首轮立论攻防阶段" if current_round == 1 else "次轮针对性交叉质询阶段",
             bull_thesis=bull_arg,
@@ -430,7 +488,8 @@ class ArbiterAgent(BaseSpecialistAgent):
 
         # 判断是否满足收敛条件
         is_converged = (
-            divergence <= settings.debate.CONVERGENCE_DELTA * 10
+            not debate_enabled
+            or divergence <= settings.debate.CONVERGENCE_DELTA * 10
             or current_round >= settings.debate.MAX_DEBATE_ROUNDS
         )
 
@@ -444,7 +503,7 @@ class ArbiterAgent(BaseSpecialistAgent):
         return {
             "current_debate_round": current_round,
             "is_debate_converged": is_converged,
-            "debate_turns": [debate_turn],
+            "debate_turns": [debate_turn] if debate_turn else [],
             "arbiter_verdict": arbiter_verdict,
             "current_step": "debate_arbitration_completed",
             "execution_logs": [log_item],

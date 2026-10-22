@@ -16,7 +16,9 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from app.core.config import settings
+from app.core.container import rate_limiter
 from app.core.llm_provider import llm_provider
+from app.core.middleware import RateLimitMiddleware
 from app.api.financial_router import router as financial_router
 from app.api.portfolio_router import router as portfolio_router
 
@@ -50,13 +52,16 @@ app = FastAPI(
 )
 
 # 配置全局跨域资源共享 (CORS)
+# 来源白名单取自配置 CORS_ORIGINS；不再使用 "*" + credentials 的组合(浏览器规范本就不允许，且会放大 Key 泄露面)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[o.strip() for o in settings.eng.CORS_ORIGINS.split(",") if o.strip()],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Idempotency-Key"],
 )
+# 限流：仅作用于会触发 LLM 调用的 POST 接口
+app.add_middleware(RateLimitMiddleware, limiter=rate_limiter)
 
 # 注册金融投研业务与模拟盘 API 路由
 app.include_router(financial_router, prefix=settings.API_PREFIX)
@@ -73,6 +78,7 @@ async def health_check():
         "project": settings.PROJECT_NAME,
         "version": settings.VERSION,
         "llm_online": llm_provider.is_configured,
+        "llm": llm_provider.status(),  # 含运行模式(live/mock)与熔断器状态
         "quant_engine": "operational",
         "risk_guardrail": "active",
     }

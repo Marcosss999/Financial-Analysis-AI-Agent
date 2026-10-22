@@ -69,28 +69,11 @@ class MarketIntelProvider:
         # 3. 抓取新浪资讯
         news_items = cls._fetch_sina_news(tc_symbol)
 
-        # 4. 组装或容灾兜底
-        if not announcements and market == "us":
-            announcements = [
-                f"{ticker} 官方近期未披露重大会计政策变更或高管减持计划",
-                f"{ticker} 季报 10-Q 申报文件合规审计通过",
-            ]
-        elif not announcements:
-            announcements = [
-                f"[{datetime.now().strftime('%Y-%m-%d')}] 近期未查见大股东高比例质押或违规减持公告",
-                "公司经营与重大合同履约情况正常",
-            ]
-
-        if not news_items and market == "us":
-            news_items = [
-                f"华尔街投行研报覆盖 {ticker}，重点关注产品周期与海外供应链进展",
-                "美股科技/核心资产板块 Beta 联动平稳",
-            ]
-        elif not news_items:
-            news_items = [
-                f"{target_name or ticker} 行业产业链上下游排产稳定，机构调研频度维持高位",
-                "券商最新策略周报将该细分行业列为重点跟踪梯队",
-            ]
+        # 4. 组装：数据源不可用时如实说明，不编造"正常/平稳"之类的内容
+        if not announcements:
+            announcements = ["（公告数据源暂不可用，本次分析未纳入公告信息）"]
+        if not news_items:
+            news_items = ["（资讯数据源暂不可用，本次分析未纳入新闻舆情）"]
 
         return MarketIntel(
             main_capital_flow=flow_info["display"],
@@ -98,6 +81,8 @@ class MarketIntelProvider:
             is_main_inflow=flow_info["is_inflow"],
             announcements=announcements[:5],
             news_headlines=news_items[:6],
+            flow_net_yuan=flow_info.get("net_yuan"),
+            data_source=flow_info.get("source", "real"),
         )
 
     @classmethod
@@ -132,15 +117,19 @@ class MarketIntelProvider:
                             "amount_str": amt_str,
                             "is_inflow": is_inflow,
                             "display": f"{direction_desc} ({amt_str})",
+                            "net_yuan": net_val,
+                            "source": "real",
                         }
         except Exception as e:
             logger.debug(f"[MarketIntel] 资金流获取降级: {e}")
 
-        # 默认中性兜底
+        # 数据源不可用：不再编造净流入金额，资金面维度将从加权中剔除
         return {
-            "amount_str": "+1,280.00 万元",
-            "is_inflow": True,
-            "display": "主力资金阶段性温和净流入 (+1,280.00 万元)",
+            "amount_str": "数据不可用",
+            "is_inflow": False,
+            "display": "主力资金数据暂不可用（已从决策加权中剔除）",
+            "net_yuan": None,
+            "source": "unavailable",
         }
 
     @classmethod

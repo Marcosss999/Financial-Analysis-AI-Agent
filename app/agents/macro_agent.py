@@ -6,9 +6,13 @@
 3. 输出结构化宏观评分 (0~10 分)、定性评级立场与关键宏观顺逆风因素。
 """
 
+import asyncio
 from datetime import datetime
 from typing import Dict, Any, List
 from app.agents.base_agent import BaseSpecialistAgent
+from app.tools.market_data import market_data_provider
+from app.tools.quant_indicators import quant_indicators_engine
+from app.tools.scoring import score_market_environment
 from app.models.agent_state import FinancialAgentState
 from app.models.schemas import SpecialistAgentOutput
 
@@ -28,6 +32,14 @@ class MacroAgent(BaseSpecialistAgent):
         ticker = state.get("ticker", "UNKNOWN")
         target_name = state.get("target_name", f"标的-{ticker}")
         custom_query = state.get("custom_query") or "全面研判宏观流动性与产业政策环境"
+
+        # 可量化的“市场环境”：沪深300 的趋势与波动状态（离线时为标注过的模拟数据）
+        idx_bars, idx_src = await asyncio.to_thread(market_data_provider.get_index_bars, 60)
+        idx_ind = quant_indicators_engine.calculate_indicators(idx_bars) if idx_bars else None
+        if idx_ind is not None:
+            quant_score, comps = score_market_environment(idx_ind)
+        else:
+            quant_score, comps = None, {}
 
         system_prompt = (
             "你是一名顶级证券研究所的宏观经济与产业策略首席分析师。\n"
@@ -52,7 +64,9 @@ class MacroAgent(BaseSpecialistAgent):
             f"分析标的代码: {ticker}\n"
             f"标的名称: {target_name}\n"
             f"投研指令: {custom_query}\n"
-            "请结合当前宏观流动性宽松周期与中长期新质生产力扶持政策，输出该标的宏观研判结论。"
+            + (f"【可量化的市场环境(沪深300，来源:{idx_src})】20日涨跌 {idx_ind.ret_20d}%，MA20/MA60={idx_ind.ma20}/{idx_ind.ma60}，"
+               f"20日年化波动率 {idx_ind.realized_vol_20}%。\n" if idx_ind is not None else "")
+            + "请基于你所掌握的宏观与产业信息客观研判，正反两方面因素都要写；若信息不足请明确说明，不要预设结论。"
         )
 
         messages = [
@@ -60,35 +74,31 @@ class MacroAgent(BaseSpecialistAgent):
             {"role": "user", "content": user_content},
         ]
 
-        raw_reply = await self._call_llm(messages, json_mode=True)
+        raw_reply, live = await self._call_llm_ex(messages, json_mode=True)
 
-        default_fallback = {
-            "stance": "中性偏多 (Mildly Bullish)",
-            "score": 7.6,
-            "summary": f"{target_name} 所处行业受国家产业支持引导明确，基准利率保持流动性合理充裕，宏观分母端估值环境良好。",
-            "details": {
-                "economic_cycle": "温和复苏期",
-                "policy_impact": "产业定向支持与税费减免政策落地预期明确",
-                "interest_rate_outlook": "十年期国债低位震荡，贴现率维持低位",
-                "industry_tailwinds": ["国家重点支柱产业扶持", "设备更新与高质量转型"],
-            },
-            "key_points": [
-                "国内货币政策维持流动性充裕，无系统性紧缩风险",
-                "海外地缘与汇率波动对出口链存在阶段性偶发扰动",
-            ],
-        }
-
-        parsed_data = self._parse_json_safely(raw_reply, default_fallback)
-
-        # 规范化封装为 SpecialistAgentOutput
-        macro_output = SpecialistAgentOutput(
-            agent_name=self.name,
-            stance=parsed_data.get("stance", "中性"),
-            score=float(parsed_data.get("score", 7.0)),
-            summary=parsed_data.get("summary", ""),
-            details=parsed_data.get("details", {}),
-            key_points=parsed_data.get("key_points", []),
-        )
+        if quant_score is None:
+            # 市场环境数据不可用：宏观维度不参与加权(权重由其余维度按比例承接)，不编造分数
+            parsed = self._parse_json_safely(raw_reply, {}) if live else {}
+            macro_output = SpecialistAgentOutput(
+                agent_name=self.name, stance="数据不足", score=5.0,
+                summary=str(parsed.get("summary") or f"{target_name} 宏观/市场环境数据不可用，该维度不参与本次加权。"),
+                details=dict(parsed.get("details") or {}), key_points=list(parsed.get("key_points") or []),
+                quant_score=None, llm_score=None, score_components={}, score_source="unavailable",
+            )
+        else:
+            fallback = {
+                "summary": (
+                    f"{target_name} 市场环境量化评分 {quant_score}/10（沪深300，数据来源:{idx_src}）：近20日 {idx_ind.ret_20d}%，"
+                    f"MA20 {idx_ind.ma20} vs MA60 {idx_ind.ma60}，20日实现波动率 {idx_ind.realized_vol_20}%。"
+                    "政策与周期等定性因素需要大模型在线才能解读。（本段为数据模板生成）"
+                ),
+                "details": {"market_environment": f"分项：{comps}"},
+                "key_points": [],
+            }
+            macro_output = self.build_output(
+                quant_score=quant_score, components=comps, raw_reply=raw_reply, live=live, fallback=fallback,
+                extra_details={"index_data_source": idx_src},
+            )
 
         log_item = {
             "node": "macro_agent",
